@@ -2,8 +2,9 @@
 
 import { useRef, useEffect, useState } from 'react';
 import { format, parseISO } from 'date-fns';
-import { fetchDomainHistory, sendReply, createDraft } from '@/lib/api';
+import { fetchDomainHistory, sendReply, createDraft, getAttachmentUrl, fetchOpportunity } from '@/lib/api';
 import ComposeEditor from './ComposeEditor';
+import ChatPanel from './ChatPanel';
 
 /* ---- Deterministic avatar color from sender name ---- */
 const AVATAR_COLORS = [
@@ -33,6 +34,28 @@ function getInitials(name) {
   return name.slice(0, 2).toUpperCase();
 }
 
+/** Format byte count to human-readable size */
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Get a file-type icon based on file extension */
+function getFileIcon(filename) {
+  if (!filename) return '📄';
+  const ext = filename.split('.').pop().toLowerCase();
+  const icons = {
+    pdf: '📕', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗',
+    ppt: '📙', pptx: '📙', zip: '🗜️', rar: '🗜️', '7z': '🗜️',
+    jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️', webp: '🖼️', svg: '🖼️',
+    mp4: '🎬', mov: '🎬', avi: '🎬', mp3: '🎵', wav: '🎵',
+    txt: '📄', csv: '📊', json: '📄', xml: '📄', html: '🌐',
+  };
+  return icons[ext] || '📄';
+}
+
 /** Extract domain from an email address string like "John <john@example.com>" */
 function extractDomain(fromStr) {
   if (!fromStr) return null;
@@ -57,6 +80,7 @@ function EmailDetail({
 }) {
   const detailRef = useRef(null);
   const replyComposeRef = useRef(null);
+  const chatPanelRef = useRef(null);
 
   // Domain history state
   const [domainEmails, setDomainEmails] = useState([]);
@@ -64,12 +88,26 @@ function EmailDetail({
   const [domainOpen, setDomainOpen] = useState(false);
   const [domainError, setDomainError] = useState(null);
   const [lastFetchedKey, setLastFetchedKey] = useState(null);
+  const [domainSearchAccount, setDomainSearchAccount] = useState(null); // which inbox to search
 
   // Reply state – which message is being replied to
   const [replyToMsg, setReplyToMsg] = useState(null);
   const [replySending, setReplySending] = useState(false);
   const [replySuccess, setReplySuccess] = useState(null);
   const [draftOnlyMode, setDraftOnlyMode] = useState(false);
+
+  // AI Chat panel state — stores email context object, not a pre-built prompt
+  const [chatContext, setChatContext] = useState(null);
+  const [chatContextMsgId, setChatContextMsgId] = useState(null);
+
+  // AI-recommended Drive file attachments (passed to ComposeEditor when replying)
+  const [aiRecommendedFiles, setAiRecommendedFiles] = useState([]);
+
+  // Linked opportunity from domain history (overrides the prop-level `opportunity`)
+  const [linkedOpportunity, setLinkedOpportunity] = useState(null);
+  // Map of domain-history email index → matched opportunity
+  const [domainMatches, setDomainMatches] = useState({});
+  const [domainMatchLoading, setDomainMatchLoading] = useState(false);
 
   // Scroll to top whenever a new email/thread is selected
   useEffect(() => {
@@ -81,8 +119,14 @@ function EmailDetail({
     setDomainEmails([]);
     setDomainError(null);
     setLastFetchedKey(null);
+    setDomainSearchAccount(null);
     setReplyToMsg(null);
     setReplySuccess(null);
+    setChatContext(null);
+    setChatContextMsgId(null);
+    setLinkedOpportunity(null);
+    setDomainMatches({});
+    setAiRecommendedFiles([]);
   }, [email?.id]);
 
   if (!email) {
@@ -132,6 +176,32 @@ function EmailDetail({
   const senderDomain = extractDomain(email.from);
   const messages = threadMessages && threadMessages.length > 0 ? threadMessages : [email];
 
+  // Determine which messages are from our own account (outgoing)
+  // and which incoming messages have been directly responded to.
+  // Uses the In-Reply-To header so each message is tracked individually —
+  // important when multiple people reply in the same thread.
+  const accountEmail = (email.account || '').toLowerCase();
+
+  // Build a set of Message-IDs that our outgoing messages directly reply to
+  const repliedToIds = new Set();
+  messages.forEach(msg => {
+    const fromLower = (msg.from || '').toLowerCase();
+    if (fromLower.includes(accountEmail) && msg.in_reply_to) {
+      repliedToIds.add(msg.in_reply_to);
+    }
+  });
+
+  const messageStatuses = messages.map((msg) => {
+    const fromLower = (msg.from || '').toLowerCase();
+    const isOurs = fromLower.includes(accountEmail);
+    // An incoming message is "responded to" only if one of our outgoing
+    // messages has an In-Reply-To that matches this message's Message-ID
+    const hasResponse = !isOurs && msg.message_id_header
+      ? repliedToIds.has(msg.message_id_header)
+      : false;
+    return { isOurs, hasResponse };
+  });
+
   const handleReplyClick = (msg) => {
     setReplyToMsg(msg);
     setReplySuccess(null);
@@ -154,6 +224,7 @@ function EmailDetail({
         subject: payload.subject,
         htmlBody: payload.htmlBody,
         attachments: payload.attachments,
+        driveFileIds: payload.driveFileIds || [],
       });
       setReplySuccess('Reply sent successfully!');
       setReplyToMsg(null);
@@ -179,6 +250,7 @@ function EmailDetail({
         threadId: email.threadId,
         messageId: replyToMsg?.id,
         attachments: payload.attachments,
+        driveFileIds: payload.driveFileIds || [],
       });
       setReplySuccess('Draft saved!');
       setReplyToMsg(null);
@@ -190,19 +262,23 @@ function EmailDetail({
     }
   };
 
-  const handleDomainSearch = async () => {
-    if (!senderDomain || !email.account) return;
+  const handleDomainSearch = async (accountOverride) => {
+    const searchAcct = accountOverride || domainSearchAccount || email.account;
+    if (!senderDomain || !searchAcct) return;
 
-    const fetchKey = `${email.account}:${senderDomain}`;
+    // Initialize the account selector on first open
+    if (!domainSearchAccount) setDomainSearchAccount(searchAcct);
+
+    const fetchKey = `${searchAcct}:${senderDomain}`;
 
     // If already open and we already fetched for this combo, just toggle
-    if (domainOpen && lastFetchedKey === fetchKey) {
+    if (domainOpen && lastFetchedKey === fetchKey && !accountOverride) {
       setDomainOpen(false);
       return;
     }
 
     // If we already have results for this key, just open
-    if (lastFetchedKey === fetchKey && domainEmails.length > 0) {
+    if (lastFetchedKey === fetchKey && domainEmails.length > 0 && !accountOverride) {
       setDomainOpen(true);
       return;
     }
@@ -211,9 +287,29 @@ function EmailDetail({
     setDomainLoading(true);
     setDomainError(null);
     try {
-      const data = await fetchDomainHistory(email.account, senderDomain);
-      setDomainEmails(data.emails || []);
+      const data = await fetchDomainHistory(searchAcct, senderDomain);
+      const domEmails = data.emails || [];
+      setDomainEmails(domEmails);
       setLastFetchedKey(fetchKey);
+
+      // Batch-match domain email subjects against the solicitation spreadsheet
+      if (domEmails.length > 0) {
+        setDomainMatchLoading(true);
+        const matches = {};
+        await Promise.all(
+          domEmails.map(async (de, idx) => {
+            if (!de.subject) return;
+            try {
+              const result = await fetchOpportunity(de.subject);
+              if (result.matched && result.opportunity) {
+                matches[idx] = result.opportunity;
+              }
+            } catch { /* ignore individual match failures */ }
+          })
+        );
+        setDomainMatches(matches);
+        setDomainMatchLoading(false);
+      }
     } catch (err) {
       console.error('Failed to fetch domain history:', err);
       setDomainError('Failed to load email history for this domain.');
@@ -221,6 +317,33 @@ function EmailDetail({
       setDomainLoading(false);
     }
   };
+
+  const handleAskAI = (msg) => {
+    const body = msg.body_plain_stripped || msg.body_plain
+      || (msg.body_html_stripped || msg.body_html || '').replace(/<[^>]+>/g, '');
+    setChatContext({
+      from: msg.from || 'Unknown',
+      to: msg.to || '',
+      subject: msg.subject || email.subject || '(no subject)',
+      date: formatFullDate(msg.date),
+      body,
+    });
+    setChatContextMsgId(msg.id);
+    // Scroll the chat panel into view after it renders
+    setTimeout(() => {
+      if (chatPanelRef.current) {
+        chatPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 100);
+  };
+
+  const handleDomainAccountChange = (newAccount) => {
+    setDomainSearchAccount(newAccount);
+    handleDomainSearch(newAccount);
+  };
+
+  // The effective opportunity — linked from domain history overrides the prop
+  const effectiveOpportunity = linkedOpportunity || opportunity;
 
   return (
     <div ref={detailRef} className={`email-detail ${visible ? 'email-detail--visible' : ''}`}>
@@ -244,7 +367,7 @@ function EmailDetail({
           {senderDomain && (
             <button
               className={`btn btn--small ${domainOpen ? 'btn--tonal' : ''}`}
-              onClick={handleDomainSearch}
+              onClick={() => handleDomainSearch()}
               disabled={domainLoading}
             >
               {domainLoading ? (
@@ -260,37 +383,37 @@ function EmailDetail({
         </div>
       </div>
 
-      {/* Government Opportunity Card (pre-fetched at load time) */}
-      {opportunity && (
+      {/* Government Opportunity Card (from direct match or linked via domain history) */}
+      {effectiveOpportunity && (
         <div className="opp-card">
           <div className="opp-card__badge">
-            {opportunity.source === 'SAM.GOV' ? '🏛️ SAM.GOV' : '📍 Local Contract'}
+            {linkedOpportunity && !opportunity ? '🔗 Linked from Domain History' : (effectiveOpportunity.source === 'SAM.GOV' ? '🏛️ SAM.GOV' : '📍 Local Contract')}
           </div>
           <div className="opp-card__body">
             <div className="opp-card__title">
-              {opportunity.title || opportunity.subject || 'Government Opportunity'}
+              {effectiveOpportunity.title || effectiveOpportunity.subject || 'Government Opportunity'}
             </div>
             <div className="opp-card__details">
-              {opportunity.due_date && (
+              {effectiveOpportunity.due_date && (
                 <span className="opp-card__detail">
-                  <strong>Due</strong> {opportunity.due_date}
+                  <strong>Due</strong> {effectiveOpportunity.due_date}
                 </span>
               )}
-              {opportunity.status && (
+              {effectiveOpportunity.status && (
                 <span className="opp-card__detail">
-                  <strong>Status</strong> {opportunity.status}
+                  <strong>Status</strong> {effectiveOpportunity.status}
                 </span>
               )}
-              {opportunity.reasoning && (
+              {effectiveOpportunity.reasoning && (
                 <span className="opp-card__detail">
-                  <strong>Source</strong> {opportunity.reasoning}
+                  <strong>Source</strong> {effectiveOpportunity.reasoning}
                 </span>
               )}
             </div>
             <div className="opp-card__links">
-              {opportunity.link && (
+              {effectiveOpportunity.link && (
                 <a
-                  href={opportunity.link}
+                  href={effectiveOpportunity.link}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="btn btn--tonal btn--small"
@@ -298,15 +421,24 @@ function EmailDetail({
                   🔗 View Solicitation
                 </a>
               )}
-              {opportunity.drive_link && opportunity.drive_link.startsWith('http') && (
+              {effectiveOpportunity.drive_link && effectiveOpportunity.drive_link.startsWith('http') && (
                 <a
-                  href={opportunity.drive_link}
+                  href={effectiveOpportunity.drive_link}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="btn btn--small"
                 >
                   📁 Google Drive
                 </a>
+              )}
+              {linkedOpportunity && (
+                <button
+                  className="btn btn--small"
+                  onClick={() => setLinkedOpportunity(null)}
+                  title="Remove the linked solicitation"
+                >
+                  ✕ Unlink
+                </button>
               )}
             </div>
           </div>
@@ -318,7 +450,7 @@ function EmailDetail({
         <div className="domain-history">
           <div className="domain-history__header">
             <span className="domain-history__title">
-              📋 Email history with <strong>{senderDomain}</strong> in {email.account}
+              📋 Email history with <strong>{senderDomain}</strong>
             </span>
             <button
               className="btn btn--icon"
@@ -327,6 +459,24 @@ function EmailDetail({
             >
               ✕
             </button>
+          </div>
+
+          {/* Inbox selector */}
+          <div className="domain-history__account-toggle">
+            {accounts.filter(a => a.authenticated).map(acct => {
+              const acctEmail = acct.email || acct.name;
+              const isActive = (domainSearchAccount || email.account) === acctEmail;
+              return (
+                <button
+                  key={acctEmail}
+                  className={`domain-history__account-chip ${isActive ? 'domain-history__account-chip--active' : ''}`}
+                  onClick={() => handleDomainAccountChange(acctEmail)}
+                  disabled={domainLoading}
+                >
+                  {acctEmail}
+                </button>
+              );
+            })}
           </div>
 
           {domainLoading && (
@@ -342,7 +492,7 @@ function EmailDetail({
 
           {!domainLoading && !domainError && domainEmails.length === 0 && (
             <div className="domain-history__empty">
-              No emails found with {senderDomain} in this inbox.
+              No emails found with {senderDomain} in {domainSearchAccount || email.account}.
             </div>
           )}
 
@@ -353,9 +503,13 @@ function EmailDetail({
               </div>
               <div className="domain-history__list">
                 {domainEmails.map((e, idx) => {
-                  const isSent = e.from && e.from.toLowerCase().includes(email.account.toLowerCase());
+                  const searchAcct = domainSearchAccount || email.account;
+                  const isSent = e.from && e.from.toLowerCase().includes(searchAcct.toLowerCase());
+                  const matchedOpp = domainMatches[idx];
+                  const isLinked = linkedOpportunity && matchedOpp &&
+                    linkedOpportunity.subject === matchedOpp.subject;
                   return (
-                    <div key={e.id || idx} className="domain-history__item">
+                    <div key={e.id || idx} className={`domain-history__item ${matchedOpp ? 'domain-history__item--has-opp' : ''}`}>
                       <div className="domain-history__item-top">
                         <span className={`domain-history__direction ${isSent ? 'domain-history__direction--sent' : 'domain-history__direction--received'}`}>
                           {isSent ? '↗ SENT' : '↙ RECEIVED'}
@@ -373,6 +527,24 @@ function EmailDetail({
                       {e.snippet && (
                         <div className="domain-history__item-snippet">
                           {e.snippet}
+                        </div>
+                      )}
+                      {matchedOpp && (
+                        <div className="domain-history__item-opp">
+                          <span className="domain-history__opp-badge">
+                            📋 {matchedOpp.source === 'SAM.GOV' ? 'SAM.GOV' : 'Local'} Solicitation
+                          </span>
+                          {isLinked ? (
+                            <span className="domain-history__opp-linked">✅ Linked</span>
+                          ) : (
+                            <button
+                              className="btn btn--small btn--tonal domain-history__link-btn"
+                              onClick={() => setLinkedOpportunity(matchedOpp)}
+                              title="Use this email's solicitation for the current email"
+                            >
+                              🔗 Link Solicitation
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -407,6 +579,8 @@ function EmailDetail({
               message={msg}
               formatDate={formatFullDate}
               isLast={idx === messages.length - 1}
+              isOurs={messageStatuses[idx].isOurs}
+              hasResponse={messageStatuses[idx].hasResponse}
               onReplyClick={(msg, draftOnly) => {
                 if (draftOnly) {
                   handleReplyClick(msg);
@@ -416,6 +590,7 @@ function EmailDetail({
                   setDraftOnlyMode(false);
                 }
               }}
+              onAskAI={handleAskAI}
             />
 
             {/* Inline compose editor – appears right below the message being replied to */}
@@ -446,6 +621,20 @@ function EmailDetail({
                     setDraftOnlyMode(false);
                   }}
                   sending={replySending}
+                  driveAttachments={aiRecommendedFiles}
+                  driveLink={effectiveOpportunity?.drive_link || null}
+                />
+              </div>
+            )}
+
+            {/* AI Chat Panel – inline below the message that triggered it */}
+            {chatContext && chatContextMsgId === msg.id && (
+              <div ref={chatPanelRef}>
+                <ChatPanel
+                  emailContext={chatContext}
+                  opportunity={effectiveOpportunity}
+                  onClose={() => { setChatContext(null); setChatContextMsgId(null); }}
+                  onRecommendAttachments={setAiRecommendedFiles}
                 />
               </div>
             )}
@@ -459,7 +648,7 @@ function EmailDetail({
 /**
  * A single message within the thread conversation.
  */
-function ThreadMessage({ message, formatDate, isLast, onReplyClick }) {
+function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, onReplyClick, onAskAI }) {
   // Extract friendly sender name
   const fromDisplay = (() => {
     const raw = message.from || '';
@@ -476,8 +665,15 @@ function ThreadMessage({ message, formatDate, isLast, onReplyClick }) {
   const hasHtml = htmlBody.trim().length > 0;
   const hasPlain = plainBody.trim().length > 0;
 
+  // Determine the response status class
+  const statusClass = isOurs
+    ? 'thread-msg--sent'
+    : hasResponse
+      ? 'thread-msg--replied'
+      : 'thread-msg--awaiting';
+
   return (
-    <div className={`thread-msg ${isLast ? 'thread-msg--last' : ''}`}>
+    <div className={`thread-msg ${isLast ? 'thread-msg--last' : ''} ${statusClass}`}>
       <div className="thread-msg__header">
         <div className="thread-msg__sender-info">
           <div
@@ -487,6 +683,14 @@ function ThreadMessage({ message, formatDate, isLast, onReplyClick }) {
             {initials}
           </div>
           <div className="thread-msg__from">{fromDisplay}</div>
+          {/* Response status badge */}
+          {isOurs ? (
+            <span className="thread-msg__status-badge thread-msg__status-badge--sent">You replied</span>
+          ) : hasResponse ? (
+            <span className="thread-msg__status-badge thread-msg__status-badge--replied">Replied</span>
+          ) : (
+            <span className="thread-msg__status-badge thread-msg__status-badge--awaiting">Needs reply</span>
+          )}
         </div>
         <div className="thread-msg__date">{formatDate(message.date)}</div>
       </div>
@@ -507,6 +711,36 @@ function ThreadMessage({ message, formatDate, isLast, onReplyClick }) {
           <p style={{ color: 'var(--color-text-tertiary)', fontStyle: 'italic', margin: 0 }}>No content</p>
         )}
       </div>
+      {/* Attachments */}
+      {message.attachments && message.attachments.length > 0 && (
+        <div className="thread-msg__attachments">
+          <div className="thread-msg__attachments-label">
+            📎 {message.attachments.length} attachment{message.attachments.length !== 1 ? 's' : ''}
+          </div>
+          <div className="thread-msg__attachments-list">
+            {message.attachments.map((att, i) => (
+              <a
+                key={att.attachmentId || i}
+                className="thread-msg__attachment"
+                href={getAttachmentUrl(message.id, att.attachmentId, message.account, att.filename)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Download ${att.filename}`}
+              >
+                <span className="thread-msg__attachment-icon">
+                  {getFileIcon(att.filename)}
+                </span>
+                <span className="thread-msg__attachment-info">
+                  <span className="thread-msg__attachment-name">{att.filename}</span>
+                  <span className="thread-msg__attachment-size">{formatBytes(att.size)}</span>
+                </span>
+                <span className="thread-msg__attachment-download">⬇</span>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="thread-msg__actions">
         <button
           className="btn btn--small btn--tonal"
@@ -521,6 +755,13 @@ function ThreadMessage({ message, formatDate, isLast, onReplyClick }) {
           title="Save a reply draft for this message"
         >
           📝 Draft Reply
+        </button>
+        <button
+          className="btn btn--small"
+          onClick={() => onAskAI && onAskAI(message)}
+          title="Ask AI to help draft a reply"
+        >
+          🤖 Ask AI
         </button>
       </div>
     </div>

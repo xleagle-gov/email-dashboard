@@ -33,7 +33,7 @@ function getInitials(name) {
 /**
  * Renders the scrollable list of email items (left panel).
  */
-function EmailList({ emails, selectedId, onSelect }) {
+function EmailList({ emails, selectedId, selectedThreadId, onSelect }) {
   if (!emails || emails.length === 0) {
     return (
       <div className="email-list">
@@ -52,9 +52,9 @@ function EmailList({ emails, selectedId, onSelect }) {
     <div className="email-list">
       {emails.map(email => (
         <EmailItem
-          key={`${email.id}-${email.account}`}
+          key={`${email.threadId || email.id}-${email.account}`}
           email={email}
-          isSelected={email.id === selectedId}
+          isSelected={email.id === selectedId || (selectedThreadId && email.threadId === selectedThreadId)}
           onClick={() => onSelect(email)}
         />
       ))}
@@ -123,7 +123,12 @@ function EmailItem({ email, isSelected, onClick }) {
       {/* Content */}
       <div className="email-item__content">
         <div className="email-item__top">
-          <span className="email-item__from">{fromDisplay}</span>
+          <span className="email-item__from">
+            {fromDisplay}
+            {email._unreadCount > 1 && (
+              <span className="email-item__thread-count">{email._unreadCount}</span>
+            )}
+          </span>
           <span className="email-item__date">{formatDate(email.date)}</span>
         </div>
         <div className="email-item__subject">{email.subject || '(no subject)'}</div>

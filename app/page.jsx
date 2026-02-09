@@ -174,6 +174,29 @@ export default function DashboardPage() {
   // Only show unread in the list
   const unreadEmails = filteredEmails.filter(e => e.is_unread);
 
+  // Group unread emails by threadId so each thread appears as one row.
+  // Uses the newest message as the representative, and attaches unreadCount.
+  const groupedEmails = (() => {
+    const threadMap = new Map();
+    for (const email of unreadEmails) {
+      const key = email.threadId || email.id; // fallback if no threadId
+      if (!threadMap.has(key)) {
+        threadMap.set(key, { representative: email, count: 1 });
+      } else {
+        const entry = threadMap.get(key);
+        entry.count += 1;
+        // Keep the newest message as the representative
+        if ((email.date || '') > (entry.representative.date || '')) {
+          entry.representative = email;
+        }
+      }
+    }
+    return Array.from(threadMap.values()).map(({ representative, count }) => ({
+      ...representative,
+      _unreadCount: count,
+    }));
+  })();
+
   // ---- Render ----
   if (loading) {
     return (
@@ -240,8 +263,9 @@ export default function DashboardPage() {
       {/* Main split view */}
       <div className="main">
         <EmailList
-          emails={unreadEmails}
+          emails={groupedEmails}
           selectedId={selectedEmail?.id}
+          selectedThreadId={selectedEmail?.threadId}
           onSelect={handleSelectEmail}
         />
         <EmailDetail

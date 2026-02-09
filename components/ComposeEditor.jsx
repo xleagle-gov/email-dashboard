@@ -1,11 +1,12 @@
 'use client';
 
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
+import { fetchDriveFiles } from '@/lib/api';
 
 /**
  * Rich-text compose / reply editor.
@@ -22,6 +23,8 @@ import Placeholder from '@tiptap/extension-placeholder';
  *   onSaveDraft   – async (payload) => void   – called when user clicks Save Draft
  *   onCancel      – () => void
  *   sending       – boolean
+ *   driveAttachments – [{id, name, mimeType}] from AI recommendations (auto-attached from Drive)
+ *   driveLink     – Google Drive folder URL (enables "Attach from Drive" picker)
  */
 export default function ComposeEditor({
   mode = 'compose',
@@ -35,12 +38,81 @@ export default function ComposeEditor({
   onSaveDraft,
   onCancel,
   sending = false,
+  driveAttachments: initialDriveAttachments = [],
+  driveLink = null,
 }) {
   const [account, setAccount] = useState(defaultAccount);
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
   const [attachments, setAttachments] = useState([]); // File[]
+  const [driveAttachments, setDriveAttachments] = useState(initialDriveAttachments); // [{id, name, mimeType}]
   const fileInputRef = useRef(null);
+
+  // Drive file picker state
+  const [drivePickerOpen, setDrivePickerOpen] = useState(false);
+  const [driveFileList, setDriveFileList] = useState([]); // all files in Drive folder
+  const [driveFileListLoading, setDriveFileListLoading] = useState(false);
+  const [driveFileListError, setDriveFileListError] = useState(null);
+  const [driveFileListLoaded, setDriveFileListLoaded] = useState(false);
+  const drivePickerRef = useRef(null);
+
+  // Determine if driveLink is valid
+  const hasDriveLink = driveLink && driveLink.startsWith('http');
+
+  // Close picker when clicking outside
+  useEffect(() => {
+    if (!drivePickerOpen) return;
+    const handleClickOutside = (e) => {
+      if (drivePickerRef.current && !drivePickerRef.current.contains(e.target)) {
+        setDrivePickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [drivePickerOpen]);
+
+  // Load Drive files when picker is first opened
+  const handleOpenDrivePicker = useCallback(async () => {
+    if (drivePickerOpen) {
+      setDrivePickerOpen(false);
+      return;
+    }
+    setDrivePickerOpen(true);
+
+    if (driveFileListLoaded || driveFileListLoading) return;
+
+    setDriveFileListLoading(true);
+    setDriveFileListError(null);
+    try {
+      const result = await fetchDriveFiles(driveLink);
+      setDriveFileList(result.files || []);
+      setDriveFileListLoaded(true);
+      if ((result.files || []).length === 0) {
+        setDriveFileListError('No files found in the Drive folder.');
+      }
+    } catch (err) {
+      console.error('Failed to load Drive files:', err);
+      setDriveFileListError('Failed to load Drive files.');
+    } finally {
+      setDriveFileListLoading(false);
+    }
+  }, [driveLink, drivePickerOpen, driveFileListLoaded, driveFileListLoading]);
+
+  // Check if a Drive file is already attached
+  const isDriveFileAttached = useCallback((fileId) => {
+    return driveAttachments.some((da) => da.id === fileId);
+  }, [driveAttachments]);
+
+  // Toggle a Drive file on/off
+  const toggleDriveFile = useCallback((file) => {
+    setDriveAttachments((prev) => {
+      const exists = prev.some((da) => da.id === file.id);
+      if (exists) {
+        return prev.filter((da) => da.id !== file.id);
+      }
+      return [...prev, { id: file.id, name: file.name, mimeType: file.mimeType || '' }];
+    });
+  }, []);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -74,6 +146,10 @@ export default function ComposeEditor({
     setAttachments(prev => prev.filter((_, i) => i !== idx));
   }, []);
 
+  const handleRemoveDriveFile = useCallback((idx) => {
+    setDriveAttachments(prev => prev.filter((_, i) => i !== idx));
+  }, []);
+
   const buildPayload = useCallback(() => {
     return {
       account,
@@ -83,8 +159,9 @@ export default function ComposeEditor({
       threadId,
       messageId,
       attachments,
+      driveFileIds: driveAttachments,
     };
-  }, [account, to, subject, editor, threadId, messageId, attachments]);
+  }, [account, to, subject, editor, threadId, messageId, attachments, driveAttachments]);
 
   const handleSend = async () => {
     if (!to.trim()) return;
@@ -258,9 +335,25 @@ export default function ComposeEditor({
         <EditorContent editor={editor} />
       </div>
 
-      {/* Attachments */}
-      {attachments.length > 0 && (
+      {/* Attachments (local + Drive) */}
+      {(attachments.length > 0 || driveAttachments.length > 0) && (
         <div className="compose-editor__attachments">
+          {/* Drive files — will be fetched server-side from Google Drive */}
+          {driveAttachments.map((df, idx) => (
+            <div key={`drive-${df.id}-${idx}`} className="compose-attachment compose-attachment--drive">
+              <span className="compose-attachment__icon">☁️</span>
+              <span className="compose-attachment__name">{df.name}</span>
+              <span className="compose-attachment__badge">Drive</span>
+              <button
+                className="compose-attachment__remove"
+                onClick={() => handleRemoveDriveFile(idx)}
+                title="Remove Drive attachment"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {/* Local file uploads */}
           {attachments.map((file, idx) => (
             <div key={`${file.name}-${idx}`} className="compose-attachment">
               <span className="compose-attachment__icon">📎</span>
@@ -315,10 +408,70 @@ export default function ComposeEditor({
           <button
             className="btn btn--small"
             onClick={() => fileInputRef.current?.click()}
-            title="Attach files"
+            title="Attach local files"
           >
             📎 Attach
           </button>
+
+          {/* Attach from Drive — only shown when there's a linked solicitation with Drive folder */}
+          {hasDriveLink && (
+            <div className="compose-drive-picker" ref={drivePickerRef}>
+              <button
+                className={`btn btn--small ${drivePickerOpen ? 'btn--tonal' : ''}`}
+                onClick={handleOpenDrivePicker}
+                title="Attach files from Google Drive solicitation folder"
+              >
+                ☁️ Drive Files
+              </button>
+
+              {drivePickerOpen && (
+                <div className="compose-drive-picker__dropdown">
+                  <div className="compose-drive-picker__header">
+                    📁 Solicitation Files
+                  </div>
+
+                  {driveFileListLoading && (
+                    <div className="compose-drive-picker__loading">
+                      <span className="spinner spinner--small" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                      Loading files…
+                    </div>
+                  )}
+
+                  {driveFileListError && (
+                    <div className="compose-drive-picker__error">{driveFileListError}</div>
+                  )}
+
+                  {driveFileListLoaded && driveFileList.length > 0 && (
+                    <div className="compose-drive-picker__list">
+                      {driveFileList.map((file) => {
+                        const attached = isDriveFileAttached(file.id);
+                        return (
+                          <button
+                            key={file.id}
+                            className={`compose-drive-picker__item ${attached ? 'compose-drive-picker__item--selected' : ''}`}
+                            onClick={() => toggleDriveFile(file)}
+                            title={attached ? 'Click to remove' : 'Click to attach'}
+                          >
+                            <span className="compose-drive-picker__check">
+                              {attached ? '✅' : '⬜'}
+                            </span>
+                            <span className="compose-drive-picker__filename">{file.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {driveAttachments.length > 0 && (
+                    <div className="compose-drive-picker__footer">
+                      {driveAttachments.length} file{driveAttachments.length !== 1 ? 's' : ''} selected
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             className="btn btn--small"
             onClick={onCancel}
