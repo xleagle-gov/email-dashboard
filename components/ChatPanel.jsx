@@ -260,22 +260,54 @@ function AiMessageContent({ content, onCopyHtml, driveFiles }) {
   );
 }
 
-/** Read a file as text (for text files) or as a data URL description (for others) */
-function readFileAsText(file) {
+/** Check if a file is a text-readable type */
+function isTextFile(file) {
+  return (
+    file.type.startsWith('text/') ||
+    file.type === 'application/json' ||
+    file.type === 'application/xml' ||
+    !!file.name.match(/\.(csv|tsv|md|txt|log|json|xml|yaml|yml|ini|cfg|html|htm|css|js|ts|py|java|c|cpp|h|rb|go|rs|sql)$/i)
+  );
+}
+
+/**
+ * Read a file and return { content, base64Data, mimeType }.
+ *  - Text files:   content = text string, base64Data = null
+ *  - Binary files:  content = placeholder string, base64Data = base64-encoded bytes
+ */
+function readFileData(file) {
   return new Promise((resolve) => {
-    const reader = new FileReader();
-    if (
-      file.type.startsWith('text/') ||
-      file.type === 'application/json' ||
-      file.type === 'application/xml' ||
-      file.name.match(/\.(csv|tsv|md|txt|log|json|xml|yaml|yml|ini|cfg|html|htm|css|js|ts|py|java|c|cpp|h|rb|go|rs|sql)$/i)
-    ) {
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => resolve(`[Could not read file: ${file.name}]`);
+    if (isTextFile(file)) {
+      const reader = new FileReader();
+      reader.onload = () =>
+        resolve({ content: reader.result, base64Data: null, mimeType: file.type || 'text/plain' });
+      reader.onerror = () =>
+        resolve({ content: `[Could not read file: ${file.name}]`, base64Data: null, mimeType: file.type || 'text/plain' });
       reader.readAsText(file);
     } else {
-      // For binary files, just describe them
-      resolve(`[Attached binary file: ${file.name} (${(file.size / 1024).toFixed(1)} KB, type: ${file.type || 'unknown'})]\nNote: Binary file content cannot be read as text. Please describe what you need help with regarding this file.`);
+      // Binary file – read as ArrayBuffer → base64
+      const reader = new FileReader();
+      reader.onload = () => {
+        const arrayBuffer = reader.result;
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const base64 = btoa(binary);
+        resolve({
+          content: `[Attached file: ${file.name} (${(file.size / 1024).toFixed(1)} KB, type: ${file.type || 'unknown'})]`,
+          base64Data: base64,
+          mimeType: file.type || 'application/octet-stream',
+        });
+      };
+      reader.onerror = () =>
+        resolve({
+          content: `[Could not read file: ${file.name}]`,
+          base64Data: null,
+          mimeType: file.type || 'application/octet-stream',
+        });
+      reader.readAsArrayBuffer(file);
     }
   });
 }
@@ -425,9 +457,9 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
   }, [emailContext, driveFilesContent, attachedFiles]);
 
   // Send a message to the AI
-  // driveFileIds is passed ONLY on the first message (for Gemini native attach)
+  // driveFileIds & uploadedFiles are passed ONLY on the first message (for Gemini native attach)
   const sendMessage = useCallback(
-    async (text, prevMessages = [], driveFileIds = []) => {
+    async (text, prevMessages = [], driveFileIds = [], uploadedFiles = []) => {
       const userMsg = { role: 'user', content: text };
       const updated = [...prevMessages, userMsg];
       setMessages(updated);
@@ -440,6 +472,7 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
           selectedProvider,
           selectedModel,
           driveFileIds,
+          uploadedFiles,
         );
         setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
 
@@ -507,6 +540,13 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
       ? driveFiles.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType }))
       : [];
 
+    // For Gemini: collect manually-uploaded binary files (those with base64Data)
+    const uploadedBinaryFiles = isGemini
+      ? attachedFiles
+          .filter((af) => af.base64Data)
+          .map((af) => ({ name: af.name, mime_type: af.mimeType, data: af.base64Data }))
+      : [];
+
     const initialMessages = [
       { role: 'system', content: finalSystemPrompt },
     ];
@@ -515,15 +555,18 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
     setPhase('chat');
 
     // Send the email context + files as the first user message
-    sendMessage(contextMessage, initialMessages, driveFileIds);
-  }, [selectedPreset, systemPrompt, isGemini, buildEmailOnlyMessage, buildContextMessage, driveFiles, sendMessage]);
+    sendMessage(contextMessage, initialMessages, driveFileIds, uploadedBinaryFiles);
+  }, [selectedPreset, systemPrompt, isGemini, buildEmailOnlyMessage, buildContextMessage, driveFiles, attachedFiles, sendMessage]);
 
   // File attachment handler
   const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files || []);
     for (const file of files) {
-      const content = await readFileAsText(file);
-      setAttachedFiles((prev) => [...prev, { file, name: file.name, content }]);
+      const { content, base64Data, mimeType } = await readFileData(file);
+      setAttachedFiles((prev) => [
+        ...prev,
+        { file, name: file.name, content, base64Data, mimeType },
+      ]);
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
   };

@@ -83,17 +83,20 @@ export default function DashboardPage() {
   };
 
   const handleMarkRead = (email) => {
-    // Optimistic UI update — fire-and-forget the API call
+    // Optimistic UI update — mark ALL emails in the same thread as read
+    const threadKey = email.threadId || email.id;
     setEmails(prev =>
       prev.map(e =>
-        e.id === email.id ? { ...e, is_unread: false, labels: e.labels.filter(l => l !== 'UNREAD') } : e
+        (e.threadId === threadKey || e.id === email.id)
+          ? { ...e, is_unread: false, labels: (e.labels || []).filter(l => l !== 'UNREAD') }
+          : e
       )
     );
     if (selectedEmail?.id === email.id) {
       setSelectedEmail(prev => ({ ...prev, is_unread: false }));
     }
-    // Fire API call in background — don't await
-    markAsRead(email.id, email.account).catch(err =>
+    // Fire API call in background — pass threadId to mark entire thread
+    markAsRead(email.id, email.account, email.threadId).catch(err =>
       console.error('Failed to mark as read:', err)
     );
   };
