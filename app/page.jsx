@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { fetchUnreadEmails, fetchAccounts, markAsRead, markAsUnread, fetchThread, createDraft, sendEmail } from '@/lib/api';
+import { fetchUnreadEmails, fetchAccounts, fetchEmailDetail, markAsRead, markAsUnread, fetchThread, createDraft, sendEmail } from '@/lib/api';
 import EmailList from '@/components/EmailList';
 import EmailDetail from '@/components/EmailDetail';
 import ComposeEditor from '@/components/ComposeEditor';
@@ -13,6 +13,7 @@ export default function DashboardPage() {
   const [selectedEmail, setSelectedEmail] = useState(null);
   const [threadMessages, setThreadMessages] = useState([]);
   const [threadLoading, setThreadLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [activeAccount, setActiveAccount] = useState(null); // null = all
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -64,16 +65,20 @@ export default function DashboardPage() {
   const handleSelectEmail = async (email) => {
     setSelectedEmail(email);
     setDetailVisible(true);
-    // Fetch the full thread for this email
+    setDetailLoading(true);
     setThreadLoading(true);
     try {
-      const data = await fetchThread(email.threadId, email.account);
-      setThreadMessages(data.messages || []);
+      const [fullEmail, threadData] = await Promise.all([
+        fetchEmailDetail(email.id, email.account),
+        fetchThread(email.threadId, email.account),
+      ]);
+      setSelectedEmail(fullEmail);
+      setThreadMessages(threadData.messages || []);
     } catch (err) {
-      console.error('Failed to load thread:', err);
-      // Fallback: just show the single email
+      console.error('Failed to load email/thread:', err);
       setThreadMessages([email]);
     } finally {
+      setDetailLoading(false);
       setThreadLoading(false);
     }
   };
@@ -274,7 +279,7 @@ export default function DashboardPage() {
         <EmailDetail
           email={selectedEmail}
           threadMessages={threadMessages}
-          threadLoading={threadLoading}
+          threadLoading={threadLoading || detailLoading}
           visible={detailVisible}
           onBack={handleBack}
           onMarkRead={handleMarkRead}
