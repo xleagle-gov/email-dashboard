@@ -2,7 +2,7 @@
 
 import { useRef, useEffect, useState } from 'react';
 import { format, parseISO } from 'date-fns';
-import { fetchDomainHistory, sendReply, createDraft, getAttachmentUrl, fetchOpportunity } from '@/lib/api';
+import { fetchDomainHistory, sendReply, createDraft, getAttachmentUrl, fetchOpportunity, fetchOpportunitiesBatch, uploadToDrive, createDriveFolder } from '@/lib/api';
 import ComposeEditor from './ComposeEditor';
 import ChatPanel from './ChatPanel';
 
@@ -56,6 +56,14 @@ function getFileIcon(filename) {
   return icons[ext] || '📄';
 }
 
+/** Senders to filter out of thread views (bounce notifications, system messages) */
+const IGNORED_SENDERS = ['mailer-daemon', 'mail delivery subsystem', 'postmaster'];
+
+function isSystemMessage(msg) {
+  const from = (msg.from || '').toLowerCase();
+  return IGNORED_SENDERS.some(s => from.includes(s));
+}
+
 /** Extract domain from an email address string like "John <john@example.com>" */
 function extractDomain(fromStr) {
   if (!fromStr) return null;
@@ -77,6 +85,8 @@ function EmailDetail({
   opportunity,
   accounts = [],
   onThreadRefresh,
+  chatManager,
+  signatures = {},
 }) {
   const detailRef = useRef(null);
   const replyComposeRef = useRef(null);
@@ -96,18 +106,17 @@ function EmailDetail({
   const [replySuccess, setReplySuccess] = useState(null);
   const [draftOnlyMode, setDraftOnlyMode] = useState(false);
 
-  // AI Chat panel state — stores email context object, not a pre-built prompt
-  const [chatContext, setChatContext] = useState(null);
-  const [chatContextMsgId, setChatContextMsgId] = useState(null);
-
-  // AI-recommended Drive file attachments (passed to ComposeEditor when replying)
-  const [aiRecommendedFiles, setAiRecommendedFiles] = useState([]);
-
   // Linked opportunity from domain history (overrides the prop-level `opportunity`)
   const [linkedOpportunity, setLinkedOpportunity] = useState(null);
   // Map of domain-history email index → matched opportunity
   const [domainMatches, setDomainMatches] = useState({});
   const [domainMatchLoading, setDomainMatchLoading] = useState(false);
+
+  // Drive upload state
+  const [driveUploading, setDriveUploading] = useState(false);
+  const [driveUploadResult, setDriveUploadResult] = useState(null);
+  const [driveCreating, setDriveCreating] = useState(false);
+  const driveUploadRef = useRef(null);
 
   // Scroll to top whenever a new email/thread is selected
   useEffect(() => {
@@ -122,12 +131,68 @@ function EmailDetail({
     setDomainSearchAccount(null);
     setReplyToMsg(null);
     setReplySuccess(null);
-    setChatContext(null);
-    setChatContextMsgId(null);
     setLinkedOpportunity(null);
     setDomainMatches({});
-    setAiRecommendedFiles([]);
+    setDriveUploadResult(null);
   }, [email?.id]);
+
+  // Auto-fetch domain history + auto-link most recent solicitation in background.
+  // Runs in parallel with thread loading — doesn't block the UI at all.
+  useEffect(() => {
+    if (!email?.id || !email?.account || !email?.from) return;
+    const domain = extractDomain(email.from);
+    if (!domain) return;
+
+    let cancelled = false;
+    setDomainLoading(true);
+
+    (async () => {
+      try {
+        // Step 1: Fetch domain history (background, doesn't block UI)
+        const data = await fetchDomainHistory(email.account, domain);
+        if (cancelled) return;
+
+        const domEmails = data.emails || [];
+        setDomainEmails(domEmails);
+        setDomainSearchAccount(email.account);
+        setLastFetchedKey(`${email.account}:${domain}`);
+
+        if (domEmails.length === 0) return;
+
+        // Step 2: Batch-match all subjects in ONE request
+        const batchInput = domEmails
+          .filter(de => de.subject)
+          .map(de => ({ id: de.id, subject: de.subject }));
+
+        if (batchInput.length === 0) return;
+
+        const matchMap = await fetchOpportunitiesBatch(batchInput);
+        if (cancelled) return;
+
+        // Step 3: Convert batch results to idx-based map for the panel UI
+        const matches = {};
+        domEmails.forEach((de, idx) => {
+          if (de.id && matchMap[de.id]) {
+            matches[idx] = matchMap[de.id];
+          }
+        });
+        setDomainMatches(matches);
+
+        // Step 4: Auto-link the most recent solicitation (idx 0 = newest)
+        const sortedIdxs = Object.keys(matches).map(Number).sort((a, b) => a - b);
+        if (sortedIdxs.length > 0) {
+          setLinkedOpportunity(matches[sortedIdxs[0]]);
+        }
+      } catch (err) {
+        console.error('Background domain fetch failed:', err);
+        // Silently fail — user can still click the button manually
+      } finally {
+        if (!cancelled) setDomainLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [email?.id, email?.account, email?.from]);
 
   if (!email) {
     return (
@@ -174,7 +239,8 @@ function EmailDetail({
   };
 
   const senderDomain = extractDomain(email.from);
-  const messages = threadMessages && threadMessages.length > 0 ? threadMessages : [email];
+  const allMessages = threadMessages && threadMessages.length > 0 ? threadMessages : [email];
+  const messages = allMessages.filter(msg => !isSystemMessage(msg));
 
   // Determine which messages are from our own account (outgoing)
   // and which incoming messages have been directly responded to.
@@ -319,16 +385,24 @@ function EmailDetail({
   };
 
   const handleAskAI = (msg) => {
-    const body = msg.body_plain_stripped || msg.body_plain
-      || (msg.body_html_stripped || msg.body_html || '').replace(/<[^>]+>/g, '');
-    setChatContext({
-      from: msg.from || 'Unknown',
-      to: msg.to || '',
-      subject: msg.subject || email.subject || '(no subject)',
-      date: formatFullDate(msg.date),
-      body,
-    });
-    setChatContextMsgId(msg.id);
+    // Create a new chat session if one doesn't exist for this message
+    if (!chatManager.sessions[msg.id]) {
+      const body = msg.body_plain_stripped || msg.body_plain
+        || (msg.body_html_stripped || msg.body_html || '').replace(/<[^>]+>/g, '');
+      chatManager.createSession(msg.id, {
+        from: msg.from || 'Unknown',
+        to: msg.to || '',
+        subject: msg.subject || email.subject || '(no subject)',
+        date: formatFullDate(msg.date),
+        body,
+      }, effectiveOpportunity, {
+        id: email.id,
+        threadId: email.threadId,
+        account: email.account,
+        subject: email.subject,
+      });
+    }
+    chatManager.setActiveMsgId(msg.id);
     // Scroll the chat panel into view after it renders
     setTimeout(() => {
       if (chatPanelRef.current) {
@@ -340,6 +414,73 @@ function EmailDetail({
   const handleDomainAccountChange = (newAccount) => {
     setDomainSearchAccount(newAccount);
     handleDomainSearch(newAccount);
+  };
+
+  // Drive upload handler
+  const handleDriveUpload = async (files) => {
+    if (!files || files.length === 0) return;
+    const opp = effectiveOpportunity;
+    const driveLink = opp?.drive_link && opp.drive_link.startsWith('http') ? opp.drive_link : null;
+    const subject = opp?.subject || email?.subject || '';
+
+    setDriveUploading(true);
+    setDriveUploadResult(null);
+    try {
+      const result = await uploadToDrive({
+        folderUrl: driveLink || '',
+        folderName: driveLink ? '' : `Solicitation_${(opp?.title || subject || 'Unknown').slice(0, 80).replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+        subject: driveLink ? '' : subject, // only write-back if creating new folder
+        files: Array.from(files),
+      });
+
+      setDriveUploadResult({
+        success: true,
+        uploaded: result.uploaded?.length || 0,
+        errors: result.errors?.length || 0,
+        folderUrl: result.folder_url,
+      });
+
+      // If a new folder was created, update the effective opportunity
+      if (!driveLink && result.folder_url) {
+        setLinkedOpportunity(prev => ({
+          ...(prev || opp || {}),
+          drive_link: result.folder_url,
+        }));
+      }
+    } catch (err) {
+      console.error('Drive upload failed:', err);
+      setDriveUploadResult({ success: false, error: err?.response?.data?.error || 'Upload failed' });
+    } finally {
+      setDriveUploading(false);
+    }
+  };
+
+  const handleCreateDriveFolder = async () => {
+    const opp = effectiveOpportunity;
+    const subject = opp?.subject || email?.subject || '';
+    const folderName = `Solicitation_${(opp?.title || subject || 'Unknown').slice(0, 80).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
+    setDriveCreating(true);
+    try {
+      const result = await createDriveFolder(folderName, subject);
+      // Update the effective opportunity with the new drive link
+      setLinkedOpportunity(prev => ({
+        ...(prev || opp || {}),
+        drive_link: result.folder_url,
+      }));
+      setDriveUploadResult({
+        success: true,
+        uploaded: 0,
+        errors: 0,
+        folderUrl: result.folder_url,
+        message: 'Folder created! You can now upload files.',
+      });
+    } catch (err) {
+      console.error('Create folder failed:', err);
+      setDriveUploadResult({ success: false, error: err?.response?.data?.error || 'Failed to create folder' });
+    } finally {
+      setDriveCreating(false);
+    }
   };
 
   // The effective opportunity — linked from domain history overrides the prop
@@ -382,6 +523,18 @@ function EmailDetail({
           )}
         </div>
       </div>
+
+      {/* Background loading indicator for domain history + solicitation matching */}
+      {domainLoading && !effectiveOpportunity && (
+        <div className="opp-card" style={{ opacity: 0.7 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px' }}>
+            <span className="spinner spinner--small" style={{ width: 16, height: 16, borderWidth: 2 }} />
+            <span style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>
+              Finding solicitation from domain history…
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Government Opportunity Card (from direct match or linked via domain history) */}
       {effectiveOpportunity && (
@@ -431,6 +584,49 @@ function EmailDetail({
                   📁 Google Drive
                 </a>
               )}
+              {/* Upload files to Drive */}
+              {effectiveOpportunity.drive_link && effectiveOpportunity.drive_link.startsWith('http') ? (
+                <>
+                  <input
+                    ref={driveUploadRef}
+                    type="file"
+                    multiple
+                    onChange={(e) => handleDriveUpload(e.target.files)}
+                    style={{ display: 'none' }}
+                  />
+                  <button
+                    className="btn btn--small"
+                    onClick={() => driveUploadRef.current?.click()}
+                    disabled={driveUploading}
+                    title="Upload files to this solicitation's Drive folder"
+                  >
+                    {driveUploading ? (
+                      <>
+                        <span className="spinner spinner--small" style={{ width: 12, height: 12, borderWidth: 2 }} />
+                        Uploading…
+                      </>
+                    ) : (
+                      <>📤 Upload to Drive</>
+                    )}
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="btn btn--small btn--tonal"
+                  onClick={handleCreateDriveFolder}
+                  disabled={driveCreating}
+                  title="Create a Google Drive folder for this solicitation"
+                >
+                  {driveCreating ? (
+                    <>
+                      <span className="spinner spinner--small" style={{ width: 12, height: 12, borderWidth: 2 }} />
+                      Creating…
+                    </>
+                  ) : (
+                    <>📂 Create Drive Folder</>
+                  )}
+                </button>
+              )}
               {linkedOpportunity && (
                 <button
                   className="btn btn--small"
@@ -441,6 +637,34 @@ function EmailDetail({
                 </button>
               )}
             </div>
+
+            {/* Upload result banner */}
+            {driveUploadResult && (
+              <div className={`opp-card__upload-result ${driveUploadResult.success ? 'opp-card__upload-result--success' : 'opp-card__upload-result--error'}`}>
+                {driveUploadResult.success ? (
+                  <span>
+                    {driveUploadResult.message || `✅ ${driveUploadResult.uploaded} file${driveUploadResult.uploaded !== 1 ? 's' : ''} uploaded`}
+                    {driveUploadResult.errors > 0 && ` (${driveUploadResult.errors} failed)`}
+                    {driveUploadResult.folderUrl && (
+                      <>
+                        {' — '}
+                        <a href={driveUploadResult.folderUrl} target="_blank" rel="noopener noreferrer">
+                          Open Folder
+                        </a>
+                      </>
+                    )}
+                  </span>
+                ) : (
+                  <span>❌ {driveUploadResult.error}</span>
+                )}
+                <button
+                  className="opp-card__upload-dismiss"
+                  onClick={() => setDriveUploadResult(null)}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -581,6 +805,8 @@ function EmailDetail({
               isLast={idx === messages.length - 1}
               isOurs={messageStatuses[idx].isOurs}
               hasResponse={messageStatuses[idx].hasResponse}
+              defaultExpanded={idx === messages.length - 1}
+              aiSession={chatManager.sessions[msg.id] || null}
               onReplyClick={(msg, draftOnly) => {
                 if (draftOnly) {
                   handleReplyClick(msg);
@@ -621,20 +847,21 @@ function EmailDetail({
                     setDraftOnlyMode(false);
                   }}
                   sending={replySending}
-                  driveAttachments={aiRecommendedFiles}
+                  driveAttachments={chatManager.sessions[chatManager.activeMsgId]?.recommendedFiles || []}
                   driveLink={effectiveOpportunity?.drive_link || null}
+                  signatures={signatures}
                 />
               </div>
             )}
 
             {/* AI Chat Panel – inline below the message that triggered it */}
-            {chatContext && chatContextMsgId === msg.id && (
+            {chatManager.activeMsgId === msg.id && chatManager.sessions[msg.id] && (
               <div ref={chatPanelRef}>
                 <ChatPanel
-                  emailContext={chatContext}
-                  opportunity={effectiveOpportunity}
-                  onClose={() => { setChatContext(null); setChatContextMsgId(null); }}
-                  onRecommendAttachments={setAiRecommendedFiles}
+                  session={chatManager.sessions[msg.id]}
+                  onUpdateSession={chatManager.updateSession}
+                  onSendMessage={chatManager.sendMessage}
+                  onClose={() => chatManager.setActiveMsgId(null)}
                 />
               </div>
             )}
@@ -646,9 +873,26 @@ function EmailDetail({
 }
 
 /**
- * A single message within the thread conversation.
+ * Extract a plain-text snippet from a message for collapsed preview.
  */
-function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, onReplyClick, onAskAI }) {
+function getSnippet(message, maxLen = 120) {
+  const plain = message.body_plain_stripped || message.body_plain || '';
+  if (plain.trim()) {
+    return plain.trim().slice(0, maxLen) + (plain.trim().length > maxLen ? '…' : '');
+  }
+  const html = message.body_html_stripped || message.body_html || '';
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return text.slice(0, maxLen) + (text.length > maxLen ? '…' : '');
+}
+
+/**
+ * A single message within the thread conversation.
+ * Supports collapsing — only the last message is expanded by default.
+ * Collapsed messages that need a reply show a snippet preview.
+ */
+function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, defaultExpanded, aiSession, onReplyClick, onAskAI }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
   // Extract friendly sender name
   const fromDisplay = (() => {
     const raw = message.from || '';
@@ -665,6 +909,8 @@ function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, onRep
   const hasHtml = htmlBody.trim().length > 0;
   const hasPlain = plainBody.trim().length > 0;
 
+  const needsReply = !isOurs && !hasResponse;
+
   // Determine the response status class
   const statusClass = isOurs
     ? 'thread-msg--sent'
@@ -672,10 +918,20 @@ function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, onRep
       ? 'thread-msg--replied'
       : 'thread-msg--awaiting';
 
+  const collapsedClass = expanded ? '' : 'thread-msg--collapsed';
+
   return (
-    <div className={`thread-msg ${isLast ? 'thread-msg--last' : ''} ${statusClass}`}>
-      <div className="thread-msg__header">
+    <div className={`thread-msg ${isLast ? 'thread-msg--last' : ''} ${statusClass} ${collapsedClass}`}>
+      <div
+        className="thread-msg__header"
+        onClick={() => setExpanded(prev => !prev)}
+        style={{ cursor: 'pointer' }}
+        title={expanded ? 'Click to collapse' : 'Click to expand'}
+      >
         <div className="thread-msg__sender-info">
+          <span className={`thread-msg__collapse-icon ${expanded ? 'thread-msg__collapse-icon--open' : ''}`}>
+            ▸
+          </span>
           <div
             className="thread-msg__avatar"
             style={{ backgroundColor: avatarColor }}
@@ -694,76 +950,89 @@ function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, onRep
         </div>
         <div className="thread-msg__date">{formatDate(message.date)}</div>
       </div>
-      {message.to && (
-        <div className="thread-msg__to">To: {message.to}</div>
-      )}
-      <div className="thread-msg__body">
-        {hasHtml ? (
-          <div
-            className="thread-msg__html-content"
-            dangerouslySetInnerHTML={{ __html: htmlBody }}
-          />
-        ) : hasPlain ? (
-          <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>
-            {plainBody}
-          </pre>
-        ) : (
-          <p style={{ color: 'var(--color-text-tertiary)', fontStyle: 'italic', margin: 0 }}>No content</p>
-        )}
-      </div>
-      {/* Attachments */}
-      {message.attachments && message.attachments.length > 0 && (
-        <div className="thread-msg__attachments">
-          <div className="thread-msg__attachments-label">
-            📎 {message.attachments.length} attachment{message.attachments.length !== 1 ? 's' : ''}
-          </div>
-          <div className="thread-msg__attachments-list">
-            {message.attachments.map((att, i) => (
-              <a
-                key={att.attachmentId || i}
-                className="thread-msg__attachment"
-                href={getAttachmentUrl(message.id, att.attachmentId, message.account, att.filename)}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={`Download ${att.filename}`}
-              >
-                <span className="thread-msg__attachment-icon">
-                  {getFileIcon(att.filename)}
-                </span>
-                <span className="thread-msg__attachment-info">
-                  <span className="thread-msg__attachment-name">{att.filename}</span>
-                  <span className="thread-msg__attachment-size">{formatBytes(att.size)}</span>
-                </span>
-                <span className="thread-msg__attachment-download">⬇</span>
-              </a>
-            ))}
-          </div>
+
+      {/* Collapsed: show snippet preview for messages that need reply */}
+      {!expanded && needsReply && (
+        <div className="thread-msg__snippet" onClick={() => setExpanded(true)}>
+          {getSnippet(message)}
         </div>
       )}
 
-      <div className="thread-msg__actions">
-        <button
-          className="btn btn--small btn--tonal"
-          onClick={() => onReplyClick && onReplyClick(message)}
-          title="Reply to this message"
-        >
-          ↩ Reply
-        </button>
-        <button
-          className="btn btn--small"
-          onClick={() => onReplyClick && onReplyClick(message, true)}
-          title="Save a reply draft for this message"
-        >
-          📝 Draft Reply
-        </button>
-        <button
-          className="btn btn--small"
-          onClick={() => onAskAI && onAskAI(message)}
-          title="Ask AI to help draft a reply"
-        >
-          🤖 Ask AI
-        </button>
-      </div>
+      {/* Expanded: full message content */}
+      {expanded && (
+        <>
+          {message.to && (
+            <div className="thread-msg__to">To: {message.to}</div>
+          )}
+          <div className="thread-msg__body">
+            {hasHtml ? (
+              <div
+                className="thread-msg__html-content"
+                dangerouslySetInnerHTML={{ __html: htmlBody }}
+              />
+            ) : hasPlain ? (
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>
+                {plainBody}
+              </pre>
+            ) : (
+              <p style={{ color: 'var(--color-text-tertiary)', fontStyle: 'italic', margin: 0 }}>No content</p>
+            )}
+          </div>
+          {/* Attachments */}
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="thread-msg__attachments">
+              <div className="thread-msg__attachments-label">
+                📎 {message.attachments.length} attachment{message.attachments.length !== 1 ? 's' : ''}
+              </div>
+              <div className="thread-msg__attachments-list">
+                {message.attachments.map((att, i) => (
+                  <a
+                    key={att.attachmentId || i}
+                    className="thread-msg__attachment"
+                    href={getAttachmentUrl(message.id, att.attachmentId, message.account, att.filename)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={`Download ${att.filename}`}
+                  >
+                    <span className="thread-msg__attachment-icon">
+                      {getFileIcon(att.filename)}
+                    </span>
+                    <span className="thread-msg__attachment-info">
+                      <span className="thread-msg__attachment-name">{att.filename}</span>
+                      <span className="thread-msg__attachment-size">{formatBytes(att.size)}</span>
+                    </span>
+                    <span className="thread-msg__attachment-download">⬇</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="thread-msg__actions">
+            <button
+              className="btn btn--small btn--tonal"
+              onClick={() => onReplyClick && onReplyClick(message)}
+              title="Reply to this message"
+            >
+              ↩ Reply
+            </button>
+            <button
+              className="btn btn--small"
+              onClick={() => onReplyClick && onReplyClick(message, true)}
+              title="Save a reply draft for this message"
+            >
+              📝 Draft Reply
+            </button>
+            <button
+              className="btn btn--small"
+              onClick={() => onAskAI && onAskAI(message)}
+              title={aiSession ? 'View AI conversation' : 'Ask AI to help draft a reply'}
+            >
+              {aiSession?.loading ? '🤖⏳ AI thinking…' : aiSession?.phase === 'chat' ? '🤖✅ View AI' : '🤖 Ask AI'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

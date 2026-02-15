@@ -563,6 +563,61 @@ a {
   box-shadow: var(--shadow-2), 0 0 0 1px rgba(227, 116, 0, 0.15);
 }
 
+/* ---- Collapsible thread messages ---- */
+.thread-msg--collapsed {
+  cursor: pointer;
+}
+
+.thread-msg--collapsed .thread-msg__header {
+  padding-bottom: 14px;
+  border-bottom: none;
+}
+
+.thread-msg--collapsed:hover {
+  background: var(--color-surface-container);
+}
+
+/* Collapsed + needs reply: subtle amber background so it stands out */
+.thread-msg--collapsed.thread-msg--awaiting {
+  background: rgba(227, 116, 0, 0.04);
+}
+
+.thread-msg--collapsed.thread-msg--awaiting:hover {
+  background: rgba(227, 116, 0, 0.08);
+}
+
+/* Collapse/expand arrow icon */
+.thread-msg__collapse-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  color: var(--color-text-tertiary);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+.thread-msg__collapse-icon--open {
+  transform: rotate(90deg);
+}
+
+/* Snippet preview for collapsed messages that need a reply */
+.thread-msg__snippet {
+  padding: 0 18px 12px 52px; /* align with text after avatar */
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-msg--awaiting .thread-msg__snippet {
+  color: #8a5200;
+}
+
 /* Status badges next to sender name */
 .thread-msg__status-badge {
   display: inline-flex;
@@ -815,6 +870,46 @@ a {
 .opp-card__links .btn--tonal:hover {
   background: #1b5e20;
   box-shadow: var(--shadow-1);
+}
+
+.opp-card__upload-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  margin-top: 10px;
+  animation: fadeInUp 0.2s var(--ease-out) both;
+}
+
+.opp-card__upload-result--success {
+  background: rgba(46, 125, 50, 0.08);
+  color: #2e7d32;
+}
+
+.opp-card__upload-result--error {
+  background: rgba(197, 34, 31, 0.08);
+  color: #c5221f;
+}
+
+.opp-card__upload-result a {
+  color: inherit;
+  font-weight: 600;
+}
+
+.opp-card__upload-dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: inherit;
+  opacity: 0.6;
+  padding: 2px 4px;
+}
+
+.opp-card__upload-dismiss:hover {
+  opacity: 1;
 }
 
 /* ============================================================ */
@@ -2562,5 +2657,310 @@ a {
   }
   .reply-success-banner {
     margin: 12px 16px;
+  }
+}
+
+/* ============================================================ */
+/*  Floating AI Toast – shows when AI is thinking in background  */
+/* ============================================================ */
+.ai-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-toast__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  animation: fadeInUp 0.3s var(--ease-out) both;
+  max-width: 380px;
+  text-align: left;
+  font-family: inherit;
+}
+
+.ai-toast__item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+.ai-toast__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-toast__text strong {
+  color: var(--color-primary);
+}
+
+/* ============================================================ */
+/*  AI Sessions Panel                                           */
+/* ============================================================ */
+.ai-sessions-panel {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  width: 380px;
+  max-height: calc(100vh - 100px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  animation: fadeInUp 0.2s var(--ease-out) both;
+}
+
+.ai-sessions-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-outline-variant);
+  flex-shrink: 0;
+}
+
+.ai-sessions-panel__title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.ai-sessions-panel__empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: 0.9rem;
+}
+
+.ai-sessions-panel__list {
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-session-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.ai-session-card:hover {
+  background: var(--color-surface-container);
+}
+
+.ai-session-card--done {
+  border-color: rgba(24, 128, 56, 0.15);
+  background: rgba(24, 128, 56, 0.04);
+}
+
+.ai-session-card--thinking {
+  border-color: rgba(25, 103, 210, 0.15);
+  background: rgba(25, 103, 210, 0.04);
+}
+
+.ai-session-card--error {
+  border-color: rgba(197, 34, 31, 0.15);
+  background: rgba(197, 34, 31, 0.04);
+}
+
+.ai-session-card__status {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.ai-session-card__icon {
+  font-size: 0.85rem;
+}
+
+.ai-session-card__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-session-card__subject {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session-card__meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 0.78rem;
+  color: var(--color-text-tertiary);
+}
+
+.ai-session-card__account {
+  opacity: 0.7;
+}
+
+.ai-session-card__dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.ai-session-card:hover .ai-session-card__dismiss {
+  opacity: 1;
+}
+
+.ai-session-card__dismiss:hover {
+  background: var(--color-surface-container);
+  color: var(--color-text);
+}
+
+/* ============================================================ */
+/*  Signature Editor                                            */
+/* ============================================================ */
+.signature-editor {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  width: 520px;
+  max-width: 95vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  z-index: 1001;
+  position: relative;
+}
+
+.signature-editor__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-outline-variant);
+}
+
+.signature-editor__title {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.signature-editor__body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.signature-editor__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.signature-editor__field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.signature-editor__field select {
+  padding: 8px 12px;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.signature-editor__textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 8px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  resize: vertical;
+  background: var(--color-surface);
+  color: var(--color-text);
+  min-height: 120px;
+}
+
+.signature-editor__textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(25, 103, 210, 0.15);
+}
+
+.signature-editor__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.signature-editor__preview label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.signature-editor__preview-content {
+  padding: 12px 16px;
+  border: 1px dashed var(--color-outline-variant);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: #666;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.signature-editor__footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--color-outline-variant);
+}
+
+/* Mobile: AI sessions panel full width */
+@media (max-width: 768px) {
+  .ai-sessions-panel {
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+  .signature-editor {
+    width: 100%;
   }
 }

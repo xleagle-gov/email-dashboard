@@ -40,6 +40,7 @@ export default function ComposeEditor({
   sending = false,
   driveAttachments: initialDriveAttachments = [],
   driveLink = null,
+  signatures = {},
 }) {
   const [account, setAccount] = useState(defaultAccount);
   const [to, setTo] = useState(defaultTo);
@@ -114,6 +115,18 @@ export default function ComposeEditor({
     });
   }, []);
 
+  // Build initial content with signature if available
+  const getSignatureHtml = useCallback((acct) => {
+    const sig = signatures[acct];
+    if (!sig) return '';
+    // Convert newlines to <br> if it doesn't contain HTML tags
+    const hasHtml = /<[a-z][\s\S]*>/i.test(sig);
+    const sigHtml = hasHtml ? sig : sig.replace(/\n/g, '<br/>');
+    return `<br/><br/><div class="email-signature" style="color: #666; border-top: 1px solid #ddd; padding-top: 8px; margin-top: 16px;">${sigHtml}</div>`;
+  }, [signatures]);
+
+  const initialSignatureHtml = getSignatureHtml(defaultAccount);
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -127,13 +140,27 @@ export default function ComposeEditor({
         placeholder: mode === 'reply' ? 'Write your reply…' : 'Compose your email…',
       }),
     ],
-    content: '',
+    content: initialSignatureHtml || '',
     editorProps: {
       attributes: {
         class: 'compose-editor__tiptap',
       },
     },
   });
+
+  // When the From account changes, update the signature
+  const prevAccountRef = useRef(defaultAccount);
+  useEffect(() => {
+    if (!editor || account === prevAccountRef.current) return;
+    prevAccountRef.current = account;
+
+    const currentHtml = editor.getHTML();
+    // Remove existing signature div if present
+    const strippedHtml = currentHtml.replace(/<div class="email-signature"[\s\S]*?<\/div>/gi, '').replace(/<br\/?>\s*<br\/?>\s*$/, '');
+
+    const newSig = getSignatureHtml(account);
+    editor.commands.setContent(strippedHtml + newSig);
+  }, [account, editor, getSignatureHtml]);
 
   const handleAddFiles = useCallback((e) => {
     const files = Array.from(e.target.files || []);

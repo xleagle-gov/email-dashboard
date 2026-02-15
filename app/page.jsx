@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { fetchUnreadEmails, fetchAccounts, fetchEmailDetail, markAsRead, markAsUnread, fetchThread, createDraft, sendEmail } from '@/lib/api';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { fetchUnreadEmails, fetchAccounts, fetchEmailDetail, markAsRead, markAsUnread, fetchThread, createDraft, sendEmail, chatWithAI } from '@/lib/api';
+import { parseRecommendedAttachments, matchFilesToDrive } from '@/components/ChatPanel';
 import EmailList from '@/components/EmailList';
 import EmailDetail from '@/components/EmailDetail';
 import ComposeEditor from '@/components/ComposeEditor';
@@ -25,6 +26,180 @@ export default function DashboardPage() {
   // Compose new email state
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeSending, setComposeSending] = useState(false);
+
+  // ---- AI Chat session management ----
+  // Sessions persist across email navigation so AI calls keep running in background
+  const [chatSessions, setChatSessions] = useState({});
+  const [activeChatMsgId, setActiveChatMsgId] = useState(null);
+
+  const updateChatSession = useCallback((sessionId, updates) => {
+    setChatSessions(prev => {
+      const session = prev[sessionId];
+      if (!session) return prev;
+      return { ...prev, [sessionId]: { ...session, ...updates } };
+    });
+  }, []);
+
+  const createChatSession = useCallback((msgId, emailContext, opportunity, emailRef) => {
+    setChatSessions(prev => ({
+      ...prev,
+      [msgId]: {
+        msgId,
+        emailContext,
+        opportunity,
+        emailRef,
+        phase: 'pick',
+        messages: [],
+        loading: false,
+        selectedProvider: 'gemini',
+        selectedModel: 'gemini-3-flash-preview',
+        selectedPreset: null,
+        systemPrompt: '',
+        driveFiles: [],
+        driveFilesContent: [],
+        driveLoading: false,
+        driveError: null,
+        driveLoaded: false,
+        attachedFiles: [],
+        recommendedFiles: [],
+      }
+    }));
+  }, []);
+
+  // Send AI message — runs at the page level so the API call persists
+  // even when ChatPanel unmounts during email navigation.
+  const sendAiMessage = useCallback(async (sessionId, text, prevMessages, provider, model, driveFileIds, uploadedFiles) => {
+    const userMsg = { role: 'user', content: text };
+    const updated = [...prevMessages, userMsg];
+
+    // Optimistically add user message and set loading
+    setChatSessions(prev => {
+      const session = prev[sessionId];
+      if (!session) return prev;
+      return { ...prev, [sessionId]: { ...session, messages: updated, loading: true } };
+    });
+
+    try {
+      const { reply } = await chatWithAI(updated, provider, model, driveFileIds, uploadedFiles);
+
+      setChatSessions(prev => {
+        const session = prev[sessionId];
+        if (!session) return prev;
+
+        const newMessages = [...session.messages, { role: 'assistant', content: reply }];
+
+        // Auto-extract recommended Drive attachments from the AI response
+        let recommendedFiles = session.recommendedFiles || [];
+        if (session.driveFiles && session.driveFiles.length > 0) {
+          const recs = parseRecommendedAttachments(reply);
+          if (recs.length > 0) {
+            const matched = matchFilesToDrive(recs, session.driveFiles);
+            const driveFilesMeta = matched
+              .filter(m => m.driveFile)
+              .map(m => ({ id: m.driveFile.id, name: m.driveFile.name, mimeType: m.driveFile.mimeType || '' }));
+            if (driveFilesMeta.length > 0) {
+              recommendedFiles = driveFilesMeta;
+            }
+          }
+        }
+
+        return {
+          ...prev,
+          [sessionId]: { ...session, messages: newMessages, loading: false, recommendedFiles }
+        };
+      });
+    } catch (err) {
+      console.error('AI chat error:', err);
+      const detail = err?.response?.data?.details || err?.response?.data?.error || '';
+      const isRateLimit = detail.toLowerCase().includes('rate-limit') || detail.includes('429');
+      const errorMsg = isRateLimit
+        ? '⚠️ All API keys are currently rate-limited. Please wait about a minute and try again.'
+        : `⚠️ Failed to get a response. ${detail || 'Please try again.'}`;
+
+      setChatSessions(prev => {
+        const session = prev[sessionId];
+        if (!session) return prev;
+        return {
+          ...prev,
+          [sessionId]: {
+            ...session,
+            messages: [...session.messages, { role: 'assistant', content: errorMsg }],
+            loading: false,
+          }
+        };
+      });
+    }
+  }, []);
+
+  // Remove a completed/errored session from the list
+  const dismissChatSession = useCallback((sessionId) => {
+    setChatSessions(prev => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    if (activeChatMsgId === sessionId) setActiveChatMsgId(null);
+  }, [activeChatMsgId]);
+
+  const chatManager = {
+    sessions: chatSessions,
+    activeMsgId: activeChatMsgId,
+    setActiveMsgId: setActiveChatMsgId,
+    createSession: createChatSession,
+    updateSession: updateChatSession,
+    sendMessage: sendAiMessage,
+  };
+
+  // AI Sessions panel
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const sessionList = useMemo(() => {
+    return Object.values(chatSessions)
+      .filter(s => s.phase === 'chat') // only show sessions that have started
+      .map(s => {
+        const assistantMsgs = s.messages.filter(m => m.role === 'assistant');
+        const hasError = assistantMsgs.length > 0 && assistantMsgs[assistantMsgs.length - 1].content.startsWith('⚠️');
+        let status = 'pending';
+        if (s.loading) status = 'thinking';
+        else if (hasError) status = 'error';
+        else if (assistantMsgs.length > 0) status = 'done';
+        return { ...s, status, assistantCount: assistantMsgs.length };
+      });
+  }, [chatSessions]);
+
+  const aiSessionCount = sessionList.length;
+
+  // ---- Signature management ----
+  const [signatures, setSignatures] = useState({});
+  const [signatureEditorOpen, setSignatureEditorOpen] = useState(false);
+  const [editingSigAccount, setEditingSigAccount] = useState('');
+  const [editingSigText, setEditingSigText] = useState('');
+
+  // Load signatures from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('emailDashboard_signatures');
+      if (saved) setSignatures(JSON.parse(saved));
+    } catch { /* ignore */ }
+  }, []);
+
+  // Save signatures to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem('emailDashboard_signatures', JSON.stringify(signatures));
+    } catch { /* ignore */ }
+  }, [signatures]);
+
+  const handleOpenSignatureEditor = (accountEmail) => {
+    setEditingSigAccount(accountEmail || accounts.find(a => a.authenticated)?.email || '');
+    setEditingSigText(signatures[accountEmail || accounts.find(a => a.authenticated)?.email || ''] || '');
+    setSignatureEditorOpen(true);
+  };
+
+  const handleSaveSignature = () => {
+    if (!editingSigAccount) return;
+    setSignatures(prev => ({ ...prev, [editingSigAccount]: editingSigText }));
+    setSignatureEditorOpen(false);
+  };
 
   // ---- Data fetching ----
   const loadEmails = useCallback(async (showLoader = true) => {
@@ -228,6 +403,22 @@ export default function DashboardPage() {
           <span className="header__count">{unreadEmails.length} unread</span>
         </div>
         <div className="header__right">
+          {aiSessionCount > 0 && (
+            <button
+              className={`btn ${aiPanelOpen ? 'btn--tonal' : ''}`}
+              onClick={() => setAiPanelOpen(prev => !prev)}
+              title="View AI sessions"
+            >
+              🤖 AI ({aiSessionCount})
+            </button>
+          )}
+          <button
+            className="btn"
+            onClick={() => handleOpenSignatureEditor()}
+            title="Edit email signatures"
+          >
+            ✍ Signature
+          </button>
           <button
             className="btn btn--primary"
             onClick={() => setComposeOpen(true)}
@@ -274,7 +465,10 @@ export default function DashboardPage() {
           emails={groupedEmails}
           selectedId={selectedEmail?.id}
           selectedThreadId={selectedEmail?.threadId}
-          onSelect={handleSelectEmail}
+          onSelect={(email) => {
+            setActiveChatMsgId(null);
+            handleSelectEmail(email);
+          }}
         />
         <EmailDetail
           email={selectedEmail}
@@ -287,8 +481,160 @@ export default function DashboardPage() {
           opportunity={selectedEmail?.opportunity || null}
           accounts={accounts}
           onThreadRefresh={handleThreadRefresh}
+          chatManager={chatManager}
+          signatures={signatures}
         />
       </div>
+
+      {/* AI Sessions Panel */}
+      {aiPanelOpen && (
+        <div className="ai-sessions-panel">
+          <div className="ai-sessions-panel__header">
+            <span className="ai-sessions-panel__title">🤖 AI Sessions</span>
+            <button className="btn btn--icon" onClick={() => setAiPanelOpen(false)} title="Close">✕</button>
+          </div>
+          {sessionList.length === 0 ? (
+            <div className="ai-sessions-panel__empty">No AI sessions yet.</div>
+          ) : (
+            <div className="ai-sessions-panel__list">
+              {sessionList.map(s => (
+                <div
+                  key={s.msgId}
+                  className={`ai-session-card ai-session-card--${s.status}`}
+                  onClick={() => {
+                    setActiveChatMsgId(s.msgId);
+                    const targetEmail = emails.find(e =>
+                      e.id === s.emailRef?.id || e.threadId === s.emailRef?.threadId
+                    );
+                    if (targetEmail) {
+                      handleSelectEmail(targetEmail);
+                    }
+                    setAiPanelOpen(false);
+                  }}
+                >
+                  <div className="ai-session-card__status">
+                    {s.status === 'thinking' && <span className="spinner spinner--small" style={{ width: 14, height: 14, borderWidth: 2 }} />}
+                    {s.status === 'done' && <span className="ai-session-card__icon ai-session-card__icon--done">✅</span>}
+                    {s.status === 'error' && <span className="ai-session-card__icon ai-session-card__icon--error">⚠️</span>}
+                    {s.status === 'pending' && <span className="ai-session-card__icon">⏳</span>}
+                  </div>
+                  <div className="ai-session-card__info">
+                    <div className="ai-session-card__subject">
+                      {(s.emailContext?.subject || '(no subject)').slice(0, 60)}
+                    </div>
+                    <div className="ai-session-card__meta">
+                      {s.emailContext?.from && <span>{s.emailContext.from.split('<')[0].trim()}</span>}
+                      {s.emailRef?.account && <span className="ai-session-card__account">{s.emailRef.account}</span>}
+                    </div>
+                  </div>
+                  <button
+                    className="ai-session-card__dismiss"
+                    onClick={(e) => { e.stopPropagation(); dismissChatSession(s.msgId); }}
+                    title="Dismiss session"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Floating AI indicator – shows when AI is thinking in the background */}
+      {Object.values(chatSessions).some(s => s.loading) && !aiPanelOpen && (
+        <div className="ai-toast">
+          {Object.values(chatSessions).filter(s => s.loading).map(s => (
+            <button
+              key={s.msgId}
+              className="ai-toast__item"
+              onClick={() => {
+                setAiPanelOpen(true);
+              }}
+              title="Click to view AI sessions"
+            >
+              <span className="spinner spinner--small" style={{ width: 14, height: 14, borderWidth: 2 }} />
+              <span className="ai-toast__text">
+                AI thinking… <strong>{(s.emailContext?.subject || '').slice(0, 50)}</strong>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Signature Editor Modal */}
+      {signatureEditorOpen && (
+        <div className="compose-overlay">
+          <div className="compose-overlay__backdrop" onClick={() => setSignatureEditorOpen(false)} />
+          <div className="signature-editor">
+            <div className="signature-editor__header">
+              <span className="signature-editor__title">✍ Edit Email Signature</span>
+              <button className="btn btn--icon" onClick={() => setSignatureEditorOpen(false)} title="Close">✕</button>
+            </div>
+            <div className="signature-editor__body">
+              <div className="signature-editor__field">
+                <label>Account</label>
+                <select
+                  value={editingSigAccount}
+                  onChange={(e) => {
+                    setEditingSigAccount(e.target.value);
+                    setEditingSigText(signatures[e.target.value] || '');
+                  }}
+                >
+                  {accounts.filter(a => a.authenticated).map(a => (
+                    <option key={a.email || a.name} value={a.email || a.name}>
+                      {a.email || a.name}
+                      {signatures[a.email || a.name] ? ' ✓' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="signature-editor__field">
+                <label>Signature (HTML supported)</label>
+                <textarea
+                  className="signature-editor__textarea"
+                  value={editingSigText}
+                  onChange={(e) => setEditingSigText(e.target.value)}
+                  rows={8}
+                  placeholder={'Best regards,\nJohn Doe\nCompany Name\n(555) 123-4567'}
+                />
+              </div>
+              {editingSigText && (
+                <div className="signature-editor__preview">
+                  <label>Preview</label>
+                  <div
+                    className="signature-editor__preview-content"
+                    dangerouslySetInnerHTML={{ __html: editingSigText.replace(/\n/g, '<br/>') }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="signature-editor__footer">
+              <button className="btn btn--primary" onClick={handleSaveSignature}>
+                💾 Save Signature
+              </button>
+              {signatures[editingSigAccount] && (
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setSignatures(prev => {
+                      const next = { ...prev };
+                      delete next[editingSigAccount];
+                      return next;
+                    });
+                    setEditingSigText('');
+                  }}
+                >
+                  🗑 Remove
+                </button>
+              )}
+              <button className="btn" onClick={() => setSignatureEditorOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Compose overlay */}
       {composeOpen && (
@@ -303,6 +649,7 @@ export default function DashboardPage() {
               onSaveDraft={handleComposeSaveDraft}
               onCancel={() => setComposeOpen(false)}
               sending={composeSending}
+              signatures={signatures}
             />
           </div>
         </div>

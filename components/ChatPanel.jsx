@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { chatWithAI, fetchAIModels, fetchDriveFiles, fetchDriveFilesContent } from '@/lib/api';
+import { fetchAIModels, fetchDriveFiles, fetchDriveFilesContent } from '@/lib/api';
 
 /* ── Default system prompts for each function ── */
 const DEFAULT_PROMPTS = {
@@ -83,7 +83,7 @@ const PROMPT_PRESETS = [
 ];
 
 /* ── Parse recommended attachments from AI response ── */
-function parseRecommendedAttachments(text) {
+export function parseRecommendedAttachments(text) {
   const startTag = 'RECOMMENDED_ATTACHMENTS_START';
   const endTag = 'RECOMMENDED_ATTACHMENTS_END';
   const startIdx = text.indexOf(startTag);
@@ -108,7 +108,7 @@ function parseRecommendedAttachments(text) {
  * Match recommended filenames to actual Drive files using fuzzy substring matching.
  * Returns an array of { filename, reason, driveFile } where driveFile may be null.
  */
-function matchFilesToDrive(recommendations, driveFiles) {
+export function matchFilesToDrive(recommendations, driveFiles) {
   return recommendations.map((rec) => {
     const recName = rec.filename.toLowerCase().replace(/[^a-z0-9.]/g, '');
     // Exact match first
@@ -313,40 +313,39 @@ function readFileData(file) {
 }
 
 /**
- * In-dashboard AI chat panel with two government contracting functions.
+ * In-dashboard AI chat panel — controlled component.
+ *
+ * Session-level state (phase, messages, loading, files, etc.) lives in the
+ * parent page and is passed via the `session` prop.  This lets the AI API call
+ * persist even when the user navigates away and this component unmounts.
  *
  * Props:
- *   emailContext – { from, to, subject, date, body } of the email
- *   opportunity  – matched opportunity object (may have drive_link)
- *   onClose      – callback to close the panel
+ *   session          – full session state object from the page-level store
+ *   onUpdateSession  – (sessionId, partialUpdates) => void
+ *   onSendMessage    – (sessionId, text, prevMessages, provider, model, driveFileIds, uploadedFiles) => void
+ *   onClose          – () => void
  */
-export default function ChatPanel({ emailContext, opportunity, onClose, onRecommendAttachments }) {
-  // Phases: 'pick' → 'chat'
-  const [phase, setPhase] = useState('pick');
+export default function ChatPanel({ session, onUpdateSession, onSendMessage, onClose }) {
+  // Destructure session-level state (persisted across navigation)
+  const {
+    msgId: sessionId, emailContext, opportunity,
+    phase, messages, loading,
+    selectedProvider, selectedModel,
+    selectedPreset, systemPrompt,
+    driveFiles, driveFilesContent, driveLoading, driveError, driveLoaded,
+    attachedFiles,
+  } = session;
 
-  const [messages, setMessages] = useState([]);
+  // Helper to update session state in the parent store
+  const update = useCallback(
+    (changes) => onUpdateSession(sessionId, changes),
+    [onUpdateSession, sessionId]
+  );
+
+  // Local-only transient state (resets on unmount, which is fine)
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  // Model selection
   const [models, setModels] = useState([]);
-  const [selectedProvider, setSelectedProvider] = useState('gemini');
-  const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
-
-  // Prompt picker state
-  const [selectedPreset, setSelectedPreset] = useState(null);
-  const [systemPrompt, setSystemPrompt] = useState('');
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
-
-  // Drive files state
-  const [driveFiles, setDriveFiles] = useState([]); // metadata from Drive
-  const [driveFilesContent, setDriveFilesContent] = useState([]); // downloaded content
-  const [driveLoading, setDriveLoading] = useState(false);
-  const [driveError, setDriveError] = useState(null);
-  const [driveLoaded, setDriveLoaded] = useState(false);
-
-  // Manual file attachments (user-uploaded)
-  const [attachedFiles, setAttachedFiles] = useState([]); // { file, name, content }
   const fileInputRef = useRef(null);
 
   const bottomRef = useRef(null);
@@ -364,42 +363,40 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
     fetchAIModels()
       .then((m) => {
         setModels(m);
-        if (m.length > 0) {
-          setSelectedProvider(m[0].provider);
-          setSelectedModel(m[0].model);
+        // Only set default model if session still has the initial defaults
+        if (m.length > 0 && selectedProvider === 'gemini' && selectedModel === 'gemini-3-flash-preview') {
+          update({ selectedProvider: m[0].provider, selectedModel: m[0].model });
         }
       })
       .catch(() => {
         setModels([{ provider: 'gemini', model: 'gemini-3-flash-preview', label: 'Gemini 3 Flash' }]);
       });
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When a preset is selected, set the default system prompt
   useEffect(() => {
     if (selectedPreset && DEFAULT_PROMPTS[selectedPreset]) {
-      setSystemPrompt(DEFAULT_PROMPTS[selectedPreset]);
+      update({ systemPrompt: DEFAULT_PROMPTS[selectedPreset] });
     }
-  }, [selectedPreset]);
+  }, [selectedPreset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fetch Drive files when a preset is selected and we have a drive link
   useEffect(() => {
     if (selectedPreset && driveLink && !driveLoaded && !driveLoading) {
       loadDriveFiles();
     }
-  }, [selectedPreset, driveLink]);
+  }, [selectedPreset, driveLink]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadDriveFiles = async () => {
     if (!driveLink) return;
-    setDriveLoading(true);
-    setDriveError(null);
+    update({ driveLoading: true, driveError: null });
     try {
       const result = await fetchDriveFiles(driveLink);
       const files = result.files || [];
-      setDriveFiles(files);
-      setDriveLoaded(true);
+      update({ driveFiles: files, driveLoaded: true });
 
       if (files.length === 0) {
-        setDriveError('No files found in the Google Drive folder. The folder may be empty or not shared with the service account. Please upload files manually.');
+        update({ driveLoading: false, driveError: 'No files found in the Google Drive folder. The folder may be empty or not shared with the service account. Please upload files manually.' });
         return;
       }
 
@@ -408,19 +405,17 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
       // For OpenAI: download text content on the frontend.
       if (!isGemini) {
         const contentResult = await fetchDriveFilesContent(files);
-        setDriveFilesContent(contentResult.files || []);
+        update({ driveFilesContent: contentResult.files || [] });
       }
     } catch (err) {
       console.error('Failed to fetch Drive files:', err);
-      setDriveError('Failed to load files from Google Drive. Please upload files manually.');
+      update({ driveError: 'Failed to load files from Google Drive. Please upload files manually.' });
     } finally {
-      setDriveLoading(false);
+      update({ driveLoading: false });
     }
   };
 
   // Check if we have any files at all (Drive + manual)
-  // For Gemini: driveFiles metadata is enough (backend downloads bytes)
-  // For OpenAI: need driveFilesContent (text already extracted)
   const driveFileCount = isGemini ? driveFiles.length : driveFilesContent.length;
   const totalFiles = driveFileCount + attachedFiles.length;
   const hasNoFiles = !driveLoading && totalFiles === 0;
@@ -455,57 +450,6 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
 
     return text;
   }, [emailContext, driveFilesContent, attachedFiles]);
-
-  // Send a message to the AI
-  // driveFileIds & uploadedFiles are passed ONLY on the first message (for Gemini native attach)
-  const sendMessage = useCallback(
-    async (text, prevMessages = [], driveFileIds = [], uploadedFiles = []) => {
-      const userMsg = { role: 'user', content: text };
-      const updated = [...prevMessages, userMsg];
-      setMessages(updated);
-      setInput('');
-      setLoading(true);
-
-      try {
-        const { reply } = await chatWithAI(
-          updated,
-          selectedProvider,
-          selectedModel,
-          driveFileIds,
-          uploadedFiles,
-        );
-        setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
-
-        // Auto-pass recommended Drive attachments to parent for use in Reply/Draft
-        if (onRecommendAttachments && driveFiles.length > 0) {
-          const recs = parseRecommendedAttachments(reply);
-          if (recs.length > 0) {
-            const matched = matchFilesToDrive(recs, driveFiles);
-            const driveFilesMeta = matched
-              .filter((m) => m.driveFile)
-              .map((m) => ({ id: m.driveFile.id, name: m.driveFile.name, mimeType: m.driveFile.mimeType || '' }));
-            if (driveFilesMeta.length > 0) {
-              onRecommendAttachments(driveFilesMeta);
-            }
-          }
-        }
-      } catch (err) {
-        console.error('AI chat error:', err);
-        const detail = err?.response?.data?.details || err?.response?.data?.error || '';
-        const isRateLimit = detail.toLowerCase().includes('rate-limit') || detail.includes('429');
-        const errorMsg = isRateLimit
-          ? '⚠️ All API keys are currently rate-limited. Please wait about a minute and try again.'
-          : `⚠️ Failed to get a response. ${detail || 'Please try again.'}`;
-        setMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: errorMsg },
-        ]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [selectedProvider, selectedModel],
-  );
 
   // Build a message with ONLY the email (no file text) – used for Gemini
   const buildEmailOnlyMessage = useCallback(() => {
@@ -551,28 +495,26 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
       { role: 'system', content: finalSystemPrompt },
     ];
 
-    setMessages(initialMessages);
-    setPhase('chat');
+    update({ messages: initialMessages, phase: 'chat' });
 
-    // Send the email context + files as the first user message
-    sendMessage(contextMessage, initialMessages, driveFileIds, uploadedBinaryFiles);
-  }, [selectedPreset, systemPrompt, isGemini, buildEmailOnlyMessage, buildContextMessage, driveFiles, attachedFiles, sendMessage]);
+    // Delegate the API call to the parent so it persists across navigation
+    onSendMessage(sessionId, contextMessage, initialMessages, selectedProvider, selectedModel, driveFileIds, uploadedBinaryFiles);
+  }, [selectedPreset, systemPrompt, isGemini, buildEmailOnlyMessage, buildContextMessage, driveFiles, attachedFiles, onSendMessage, sessionId, selectedProvider, selectedModel, update]);
 
   // File attachment handler
   const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files || []);
+    const newFiles = [];
     for (const file of files) {
       const { content, base64Data, mimeType } = await readFileData(file);
-      setAttachedFiles((prev) => [
-        ...prev,
-        { file, name: file.name, content, base64Data, mimeType },
-      ]);
+      newFiles.push({ file, name: file.name, content, base64Data, mimeType });
     }
+    update({ attachedFiles: [...attachedFiles, ...newFiles] });
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const removeFile = (idx) => {
-    setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
+    update({ attachedFiles: attachedFiles.filter((_, i) => i !== idx) });
   };
 
   // Auto-scroll to bottom on new messages
@@ -590,13 +532,14 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
-    sendMessage(input.trim(), messages);
+    const text = input.trim();
+    setInput('');
+    onSendMessage(sessionId, text, messages, selectedProvider, selectedModel, [], []);
   };
 
   const handleModelChange = (e) => {
     const [prov, mod] = e.target.value.split(':');
-    setSelectedProvider(prov);
-    setSelectedModel(mod);
+    update({ selectedProvider: prov, selectedModel: mod });
   };
 
   const [copiedIdx, setCopiedIdx] = useState(null);
@@ -704,7 +647,7 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
                 <button
                   key={preset.id}
                   className={`chat-picker__preset ${selectedPreset === preset.id ? 'chat-picker__preset--active' : ''}`}
-                  onClick={() => setSelectedPreset(preset.id)}
+                  onClick={() => update({ selectedPreset: preset.id })}
                 >
                   <span className="chat-picker__preset-icon">{preset.icon}</span>
                   <div className="chat-picker__preset-text">
@@ -735,7 +678,7 @@ export default function ChatPanel({ emailContext, opportunity, onClose, onRecomm
               <textarea
                   className="chat-picker__system-prompt"
                   value={systemPrompt}
-                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  onChange={(e) => update({ systemPrompt: e.target.value })}
                   rows={8}
                   placeholder="Enter system prompt..."
                 />
