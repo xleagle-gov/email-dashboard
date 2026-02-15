@@ -413,11 +413,12 @@ export default function DashboardPage() {
             </button>
           )}
           <button
-            className="btn"
+            className="btn btn--small"
             onClick={() => handleOpenSignatureEditor()}
             title="Edit email signatures"
+            style={{ fontSize: '0.8rem', padding: '4px 8px' }}
           >
-            ✍ Signature
+            ⚙ Edit Signatures
           </button>
           <button
             className="btn btn--primary"

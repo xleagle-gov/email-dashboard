@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
@@ -25,8 +25,11 @@ import { fetchDriveFiles } from '@/lib/api';
  *   sending       – boolean
  *   driveAttachments – [{id, name, mimeType}] from AI recommendations (auto-attached from Drive)
  *   driveLink     – Google Drive folder URL (enables "Attach from Drive" picker)
+ *
+ * Ref methods:
+ *   appendSignature() – appends the current account's signature to the editor content
  */
-export default function ComposeEditor({
+const ComposeEditor = forwardRef(function ComposeEditor({
   mode = 'compose',
   accounts = [],
   defaultAccount = '',
@@ -41,7 +44,7 @@ export default function ComposeEditor({
   driveAttachments: initialDriveAttachments = [],
   driveLink = null,
   signatures = {},
-}) {
+}, ref) {
   const [account, setAccount] = useState(defaultAccount);
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
@@ -125,8 +128,6 @@ export default function ComposeEditor({
     return `<br/><br/><div class="email-signature" style="color: #666; border-top: 1px solid #ddd; padding-top: 8px; margin-top: 16px;">${sigHtml}</div>`;
   }, [signatures]);
 
-  const initialSignatureHtml = getSignatureHtml(defaultAccount);
-
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -140,7 +141,7 @@ export default function ComposeEditor({
         placeholder: mode === 'reply' ? 'Write your reply…' : 'Compose your email…',
       }),
     ],
-    content: initialSignatureHtml || '',
+    content: '',
     editorProps: {
       attributes: {
         class: 'compose-editor__tiptap',
@@ -148,19 +149,18 @@ export default function ComposeEditor({
     },
   });
 
-  // When the From account changes, update the signature
-  const prevAccountRef = useRef(defaultAccount);
-  useEffect(() => {
-    if (!editor || account === prevAccountRef.current) return;
-    prevAccountRef.current = account;
-
-    const currentHtml = editor.getHTML();
-    // Remove existing signature div if present
-    const strippedHtml = currentHtml.replace(/<div class="email-signature"[\s\S]*?<\/div>/gi, '').replace(/<br\/?>\s*<br\/?>\s*$/, '');
-
-    const newSig = getSignatureHtml(account);
-    editor.commands.setContent(strippedHtml + newSig);
-  }, [account, editor, getSignatureHtml]);
+  // Expose appendSignature to parent via ref
+  useImperativeHandle(ref, () => ({
+    appendSignature() {
+      if (!editor) return;
+      const currentHtml = editor.getHTML();
+      // Don't add if there's already a signature
+      if (/<div class="email-signature"/i.test(currentHtml)) return;
+      const sigHtml = getSignatureHtml(account);
+      if (!sigHtml) return;
+      editor.commands.setContent(currentHtml + sigHtml);
+    },
+  }), [editor, account, getSignatureHtml]);
 
   const handleAddFiles = useCallback((e) => {
     const files = Array.from(e.target.files || []);
@@ -509,4 +509,6 @@ export default function ComposeEditor({
       </div>
     </div>
   );
-}
+});
+
+export default ComposeEditor;

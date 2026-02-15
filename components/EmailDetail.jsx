@@ -91,6 +91,7 @@ function EmailDetail({
   const detailRef = useRef(null);
   const replyComposeRef = useRef(null);
   const chatPanelRef = useRef(null);
+  const composeEditorRef = useRef(null);
 
   // Domain history state
   const [domainEmails, setDomainEmails] = useState([]);
@@ -807,6 +808,7 @@ function EmailDetail({
               hasResponse={messageStatuses[idx].hasResponse}
               defaultExpanded={idx === messages.length - 1}
               aiSession={chatManager.sessions[msg.id] || null}
+              isReplyOpen={replyToMsg && replyToMsg.id === msg.id}
               onReplyClick={(msg, draftOnly) => {
                 if (draftOnly) {
                   handleReplyClick(msg);
@@ -817,12 +819,29 @@ function EmailDetail({
                 }
               }}
               onAskAI={handleAskAI}
+              onAddSignature={() => {
+                // If reply editor is already open for this message, append signature
+                if (replyToMsg && replyToMsg.id === msg.id && composeEditorRef.current) {
+                  composeEditorRef.current.appendSignature();
+                } else {
+                  // Open the reply editor first, then append signature after it mounts
+                  handleReplyClick(msg);
+                  setDraftOnlyMode(false);
+                  setTimeout(() => {
+                    if (composeEditorRef.current) {
+                      composeEditorRef.current.appendSignature();
+                    }
+                  }, 300);
+                }
+              }}
+              hasSignature={!!signatures[email.account]}
             />
 
             {/* Inline compose editor – appears right below the message being replied to */}
             {replyToMsg && replyToMsg.id === msg.id && (
               <div className="thread-reply-compose" ref={replyComposeRef}>
                 <ComposeEditor
+                  ref={composeEditorRef}
                   mode="reply"
                   accounts={accounts}
                   defaultAccount={email.account}
@@ -890,7 +909,7 @@ function getSnippet(message, maxLen = 120) {
  * Supports collapsing — only the last message is expanded by default.
  * Collapsed messages that need a reply show a snippet preview.
  */
-function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, defaultExpanded, aiSession, onReplyClick, onAskAI }) {
+function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, defaultExpanded, aiSession, isReplyOpen, onReplyClick, onAskAI, onAddSignature, hasSignature }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   // Extract friendly sender name
@@ -1030,6 +1049,15 @@ function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, defau
             >
               {aiSession?.loading ? '🤖⏳ AI thinking…' : aiSession?.phase === 'chat' ? '🤖✅ View AI' : '🤖 Ask AI'}
             </button>
+            {hasSignature && (
+              <button
+                className="btn btn--small"
+                onClick={() => onAddSignature && onAddSignature()}
+                title="Add your signature to the reply"
+              >
+                ✍ Add Signature
+              </button>
+            )}
           </div>
         </>
       )}
