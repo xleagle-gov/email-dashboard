@@ -1049,15 +1049,13 @@ function ThreadMessage({ message, formatDate, isLast, isOurs, hasResponse, defau
             >
               {aiSession?.loading ? '🤖⏳ AI thinking…' : aiSession?.phase === 'chat' ? '🤖✅ View AI' : '🤖 Ask AI'}
             </button>
-            {hasSignature && (
-              <button
-                className="btn btn--small"
-                onClick={() => onAddSignature && onAddSignature()}
-                title="Add your signature to the reply"
-              >
-                ✍ Add Signature
-              </button>
-            )}
+            <button
+              className="btn btn--small"
+              onClick={() => onAddSignature && onAddSignature()}
+              title="Add your signature to the reply"
+            >
+              ✍ Add Signature
+            </button>
           </div>
         </>
       )}

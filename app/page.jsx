@@ -152,6 +152,7 @@ export default function DashboardPage() {
 
   // AI Sessions panel
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [dismissedToasts, setDismissedToasts] = useState(new Set());
   const sessionList = useMemo(() => {
     return Object.values(chatSessions)
       .filter(s => s.phase === 'chat') // only show sessions that have started
@@ -542,26 +543,58 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Floating AI indicator – shows when AI is thinking in the background */}
-      {Object.values(chatSessions).some(s => s.loading) && !aiPanelOpen && (
-        <div className="ai-toast">
-          {Object.values(chatSessions).filter(s => s.loading).map(s => (
-            <button
-              key={s.msgId}
-              className="ai-toast__item"
-              onClick={() => {
-                setAiPanelOpen(true);
-              }}
-              title="Click to view AI sessions"
-            >
-              <span className="spinner spinner--small" style={{ width: 14, height: 14, borderWidth: 2 }} />
-              <span className="ai-toast__text">
-                AI thinking… <strong>{(s.emailContext?.subject || '').slice(0, 50)}</strong>
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Floating AI status bar – persists until manually dismissed */}
+      {(() => {
+        const visibleSessions = Object.values(chatSessions)
+          .filter(s => s.phase === 'chat' && !dismissedToasts.has(s.msgId))
+          .map(s => {
+            const assistantMsgs = s.messages.filter(m => m.role === 'assistant');
+            const hasError = assistantMsgs.length > 0 && assistantMsgs[assistantMsgs.length - 1].content.startsWith('⚠️');
+            let status = 'pending';
+            if (s.loading) status = 'thinking';
+            else if (hasError) status = 'error';
+            else if (assistantMsgs.length > 0) status = 'done';
+            return { ...s, status };
+          });
+        if (visibleSessions.length === 0 || aiPanelOpen) return null;
+        return (
+          <div className="ai-toast">
+            {visibleSessions.map(s => (
+              <div key={s.msgId} className={`ai-toast__item ai-toast__item--${s.status}`}>
+                <button
+                  className="ai-toast__body"
+                  onClick={() => setAiPanelOpen(true)}
+                  title="Click to view AI sessions"
+                >
+                  {s.status === 'thinking' && (
+                    <span className="spinner spinner--small" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                  )}
+                  {s.status === 'done' && <span className="ai-toast__icon">✅</span>}
+                  {s.status === 'error' && <span className="ai-toast__icon">⚠️</span>}
+                  {s.status === 'pending' && <span className="ai-toast__icon">⏳</span>}
+                  <span className="ai-toast__text">
+                    {s.status === 'thinking' && 'AI thinking… '}
+                    {s.status === 'done' && 'AI done – '}
+                    {s.status === 'error' && 'AI error – '}
+                    {s.status === 'pending' && 'AI pending – '}
+                    <strong>{(s.emailContext?.subject || '').slice(0, 50)}</strong>
+                  </span>
+                </button>
+                <button
+                  className="ai-toast__close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDismissedToasts(prev => new Set([...prev, s.msgId]));
+                  }}
+                  title="Dismiss this status"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Signature Editor Modal */}
       {signatureEditorOpen && (

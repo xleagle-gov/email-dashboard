@@ -7,7 +7,7 @@ import { fetchAIModels, fetchDriveFiles, fetchDriveFilesContent } from '@/lib/ap
 const DEFAULT_PROMPTS = {
   'vendor-question': `You are an AI assistant helping a government contracting company. We are government contractors who have reached out to a business to see if they could fulfill a specific government contract/solicitation. The vendor has responded to us with a question about the contract.
 
-We are attaching all the files of the contract/solicitation for your reference.
+We are attaching all the files of the contract/solicitation for YOUR reference only — use them to understand the contract and answer the vendor's question accurately.
 
 IMPORTANT: The vendor does NOT have access to the solicitation files. They may only have received a brief description or summary of what we need. Keep this in mind when drafting your response.
 
@@ -18,22 +18,33 @@ Please analyze the vendor's question in the email below and provide:
 2. **Draft Email (HTML formatted):** Draft a professional response that I can send directly to the vendor. The response should:
 - Directly answer their question based on the contract documents
 - Reference specific sections, clauses, or details from the solicitation where applicable
-- Do NOT assume the vendor has seen the solicitation files — write the email so it makes sense even without the attachments, but reference "the attached documents" where appropriate
+- Do NOT assume the vendor has seen the solicitation files — write the email so it makes sense even without the attachments, but reference "the attached documents" ONLY if you are actually recommending attachments below
 - Be polite, professional, and thorough
 - Format the email in clean HTML with proper structure (paragraphs, bullet lists, etc.) so it is ready to copy and send
 
-3. **Recommended Attachments:** After the HTML draft, output a section with EXACTLY this format:
+3. **Recommended Attachments:** Think critically about whether the vendor ACTUALLY NEEDS any solicitation files to understand your response or take action. Be SELECTIVE — do NOT recommend all files by default.
+
+Rules for recommending attachments:
+- Only recommend a file if the vendor genuinely needs to READ it to understand the answer or fulfill the requirement
+- If the vendor asked a simple question (e.g. about timeline, location, payment terms) and your email answer is self-contained, recommend ZERO files
+- If the vendor needs to see specific specs, drawings, or line items that are too detailed to put in the email, recommend ONLY those specific files
+- NEVER recommend files just "for reference" or "for context" — only recommend files the vendor will actually need to act on
+
+Output with EXACTLY this format:
 
 RECOMMENDED_ATTACHMENTS_START
-- filename: [exact filename from the solicitation files] | reason: [why the vendor needs this file]
-- filename: [exact filename] | reason: [why they need it]
+NONE
 RECOMMENDED_ATTACHMENTS_END
 
-List which solicitation files from our folder should be attached to this email so the vendor has the context they need to understand our response.`,
+OR, if specific files are truly needed:
+
+RECOMMENDED_ATTACHMENTS_START
+- filename: [exact filename from the solicitation files] | reason: [specific reason the vendor needs THIS file to answer their question or take action]
+RECOMMENDED_ATTACHMENTS_END`,
 
   'full-partial-quote': `You are an AI assistant helping a government contracting company analyze vendor quotes/proposals. We are government contractors who have sent solicitations to businesses, and a vendor has responded with a quote or proposal.
 
-We are attaching all the files of the contract/solicitation for your reference.
+We are attaching all the files of the contract/solicitation for YOUR reference only — use them to analyze the vendor's quote against the requirements.
 
 IMPORTANT: The vendor does NOT have access to the solicitation files. They may only have received a brief description or summary of what we need. Keep this in mind when analyzing their quote and drafting any response.
 
@@ -47,23 +58,36 @@ Provide a detailed breakdown of:
 3. Your assessment: FULL or PARTIAL quote
 4. Any concerns or notes about the quote's completeness
 
+If it is a FULL QUOTE:
+- Confirm what's covered and note any concerns
+- Output the attachments block with NONE (no need to send files back if the quote is complete)
+
 If it is a PARTIAL QUOTE, provide TWO things:
 
 A) **Draft Email (HTML formatted):** Draft a professional response that I can send directly to the vendor. The response should:
 - Thank them for their quote
 - Clearly list the missing line items or requirements they did not address
 - Politely request they provide pricing/details for the missing items
-- Do NOT assume the vendor has seen the solicitation files — write the email so it makes sense even without the attachments, but reference "the attached documents" where appropriate
+- Do NOT assume the vendor has seen the solicitation files — write the email so it makes sense even without the attachments, but reference "the attached documents" ONLY if you are actually recommending attachments below
 - Format the email in clean HTML with proper structure (paragraphs, bullet lists, etc.) so it is ready to copy and send
 
-B) **Recommended Attachments:** After the HTML draft, output a section with EXACTLY this format:
+B) **Recommended Attachments:** Think critically about whether the vendor ACTUALLY NEEDS any files. Be SELECTIVE:
+- Only recommend files that contain the specific line items or specs the vendor MISSED and needs to see
+- If your email already lists the missing items clearly enough, recommend ZERO files
+- NEVER recommend all files — only the ones directly relevant to what the vendor is missing
+- Do NOT recommend files just "for reference" or "for context"
+
+Output with EXACTLY this format:
 
 RECOMMENDED_ATTACHMENTS_START
-- filename: [exact filename from the solicitation files] | reason: [why the vendor needs this file]
-- filename: [exact filename] | reason: [why they need it]
+NONE
 RECOMMENDED_ATTACHMENTS_END
 
-List which solicitation files from our folder should be attached to this email so the vendor has the context they need to complete their quote.`,
+OR, if specific files are truly needed:
+
+RECOMMENDED_ATTACHMENTS_START
+- filename: [exact filename from the solicitation files] | reason: [specific reason the vendor needs THIS file to complete their quote]
+RECOMMENDED_ATTACHMENTS_END`,
 };
 
 /* ── Preset definitions ── */
@@ -91,6 +115,7 @@ export function parseRecommendedAttachments(text) {
   if (startIdx === -1 || endIdx === -1) return [];
 
   const block = text.substring(startIdx + startTag.length, endIdx).trim();
+  if (!block || block.toUpperCase() === 'NONE') return [];
   const lines = block.split('\n').filter((l) => l.trim().startsWith('-'));
   return lines.map((line) => {
     const cleaned = line.replace(/^-\s*/, '');
