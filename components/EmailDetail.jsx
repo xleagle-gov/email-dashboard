@@ -205,6 +205,18 @@ function EmailDetail({
     return () => { cancelled = true; };
   }, [email?.id, email?.account, email?.from]);
 
+  // Keep all existing AI chat sessions in sync when the linked opportunity changes
+  const effectiveOpp = linkedOpportunity || opportunity;
+  useEffect(() => {
+    if (!chatManager.sessions) return;
+    Object.keys(chatManager.sessions).forEach((sid) => {
+      const s = chatManager.sessions[sid];
+      if (s?.opportunity !== effectiveOpp) {
+        chatManager.updateSession(sid, { opportunity: effectiveOpp || null });
+      }
+    });
+  }, [effectiveOpp]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!email) {
     return (
       <div className={`email-detail ${visible ? 'email-detail--visible' : ''}`}>
@@ -518,20 +530,7 @@ function EmailDetail({
   };
 
   // The effective opportunity — linked from domain history overrides the prop
-  const effectiveOpportunity = linkedOpportunity || opportunity;
-
-  // Keep all existing AI chat sessions in sync when the linked opportunity changes
-  useEffect(() => {
-    if (!chatManager.sessions) return;
-    Object.keys(chatManager.sessions).forEach((sid) => {
-      const s = chatManager.sessions[sid];
-      const prev = s?.opportunity;
-      const next = effectiveOpportunity;
-      if (prev !== next) {
-        chatManager.updateSession(sid, { opportunity: next || null });
-      }
-    });
-  }, [effectiveOpportunity]); // eslint-disable-line react-hooks/exhaustive-deps
+  const effectiveOpportunity = effectiveOpp;
 
   return (
     <div ref={detailRef} className={`email-detail ${visible ? 'email-detail--visible' : ''}`}>
