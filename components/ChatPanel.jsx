@@ -394,6 +394,9 @@ export default function ChatPanel({ session, onUpdateSession, onSendMessage, onC
     ? opportunity.drive_link
     : null;
 
+  // Track previous drive link so we can re-fetch when the linked solicitation changes
+  const prevDriveLinkRef = useRef(driveLink);
+
   const isGemini = selectedProvider === 'gemini';
 
   // Load available models on mount
@@ -418,9 +421,17 @@ export default function ChatPanel({ session, onUpdateSession, onSendMessage, onC
     }
   }, [selectedPreset]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-fetch Drive files when a preset is selected and we have a drive link
+  // Auto-fetch Drive files when a preset is selected and we have a drive link,
+  // or when the drive link changes due to re-linking a solicitation.
   useEffect(() => {
-    if (selectedPreset && driveLink && !driveLoaded && !driveLoading) {
+    const linkChanged = driveLink !== prevDriveLinkRef.current;
+    prevDriveLinkRef.current = driveLink;
+
+    if (linkChanged && driveLink && selectedPreset) {
+      // Drive link changed (solicitation re-linked) — reset and re-fetch
+      update({ driveLoaded: false, driveFiles: [], driveFilesContent: [], driveError: null });
+      loadDriveFiles();
+    } else if (selectedPreset && driveLink && !driveLoaded && !driveLoading) {
       loadDriveFiles();
     }
   }, [selectedPreset, driveLink]); // eslint-disable-line react-hooks/exhaustive-deps
