@@ -119,6 +119,13 @@ function EmailDetail({
   const [driveCreating, setDriveCreating] = useState(false);
   const driveUploadRef = useRef(null);
 
+  // Manual link solicitation state
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkSubject, setLinkSubject] = useState('');
+  const [linkSearching, setLinkSearching] = useState(false);
+  const [linkError, setLinkError] = useState(null);
+  const linkInputRef = useRef(null);
+
   // Scroll to top whenever a new email/thread is selected
   useEffect(() => {
     if (detailRef.current) {
@@ -135,6 +142,9 @@ function EmailDetail({
     setLinkedOpportunity(null);
     setDomainMatches({});
     setDriveUploadResult(null);
+    setLinkOpen(false);
+    setLinkSubject('');
+    setLinkError(null);
   }, [email?.id]);
 
   // Auto-fetch domain history + auto-link most recent solicitation in background.
@@ -484,6 +494,29 @@ function EmailDetail({
     }
   };
 
+  const handleLinkSolicitation = async () => {
+    const subject = linkSubject.trim();
+    if (!subject) return;
+
+    setLinkSearching(true);
+    setLinkError(null);
+    try {
+      const result = await fetchOpportunity(subject);
+      if (result.matched && result.opportunity) {
+        setLinkedOpportunity(result.opportunity);
+        setLinkOpen(false);
+        setLinkSubject('');
+      } else {
+        setLinkError('No matching solicitation found for that subject.');
+      }
+    } catch (err) {
+      console.error('Link solicitation failed:', err);
+      setLinkError('Search failed. Please try again.');
+    } finally {
+      setLinkSearching(false);
+    }
+  };
+
   // The effective opportunity — linked from domain history overrides the prop
   const effectiveOpportunity = linkedOpportunity || opportunity;
 
@@ -524,6 +557,77 @@ function EmailDetail({
           )}
         </div>
       </div>
+
+      {/* Link solicitation button – shown when no opportunity is matched */}
+      {!effectiveOpportunity && !domainLoading && (
+        <div className="opp-card" style={{ borderLeft: '4px solid var(--color-border)' }}>
+          <div className="opp-card__body" style={{ padding: '12px 16px' }}>
+            {!linkOpen ? (
+              <button
+                className="btn btn--small btn--tonal"
+                onClick={() => {
+                  setLinkOpen(true);
+                  setTimeout(() => linkInputRef.current?.focus(), 100);
+                }}
+              >
+                🔗 Link Solicitation
+              </button>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                  Enter the solicitation subject to link:
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    ref={linkInputRef}
+                    type="text"
+                    value={linkSubject}
+                    onChange={(e) => setLinkSubject(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleLinkSolicitation(); if (e.key === 'Escape') { setLinkOpen(false); setLinkError(null); } }}
+                    placeholder="Paste or type the solicitation subject…"
+                    disabled={linkSearching}
+                    style={{
+                      flex: 1,
+                      padding: '7px 12px',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 8,
+                      fontSize: '0.85rem',
+                      outline: 'none',
+                      backgroundColor: 'var(--color-surface)',
+                      color: 'var(--color-text)',
+                    }}
+                  />
+                  <button
+                    className="btn btn--small btn--tonal"
+                    onClick={handleLinkSolicitation}
+                    disabled={linkSearching || !linkSubject.trim()}
+                  >
+                    {linkSearching ? (
+                      <>
+                        <span className="spinner spinner--small" style={{ width: 12, height: 12, borderWidth: 2 }} />
+                        Searching…
+                      </>
+                    ) : (
+                      'Search'
+                    )}
+                  </button>
+                  <button
+                    className="btn btn--small"
+                    onClick={() => { setLinkOpen(false); setLinkError(null); setLinkSubject(''); }}
+                  >
+                    ✕
+                  </button>
+                </div>
+                {linkError && (
+                  <div style={{ fontSize: '0.8rem', color: '#c5221f', marginTop: 2 }}>
+                    {linkError}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Background loading indicator for domain history + solicitation matching */}
       {domainLoading && !effectiveOpportunity && (
@@ -628,6 +732,17 @@ function EmailDetail({
                   )}
                 </button>
               )}
+              <button
+                className="btn btn--small"
+                onClick={() => {
+                  setLinkOpen(!linkOpen);
+                  setLinkError(null);
+                  if (!linkOpen) setTimeout(() => linkInputRef.current?.focus(), 100);
+                }}
+                title="Link a different solicitation by subject"
+              >
+                🔗 Link
+              </button>
               {linkedOpportunity && (
                 <button
                   className="btn btn--small"
@@ -638,6 +753,58 @@ function EmailDetail({
                 </button>
               )}
             </div>
+
+            {/* Inline link-by-subject form inside the opportunity card */}
+            {linkOpen && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0 4px' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    ref={linkInputRef}
+                    type="text"
+                    value={linkSubject}
+                    onChange={(e) => setLinkSubject(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleLinkSolicitation(); if (e.key === 'Escape') { setLinkOpen(false); setLinkError(null); } }}
+                    placeholder="Paste or type the solicitation subject…"
+                    disabled={linkSearching}
+                    style={{
+                      flex: 1,
+                      padding: '7px 12px',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 8,
+                      fontSize: '0.85rem',
+                      outline: 'none',
+                      backgroundColor: 'var(--color-surface)',
+                      color: 'var(--color-text)',
+                    }}
+                  />
+                  <button
+                    className="btn btn--small btn--tonal"
+                    onClick={handleLinkSolicitation}
+                    disabled={linkSearching || !linkSubject.trim()}
+                  >
+                    {linkSearching ? (
+                      <>
+                        <span className="spinner spinner--small" style={{ width: 12, height: 12, borderWidth: 2 }} />
+                        Searching…
+                      </>
+                    ) : (
+                      'Search'
+                    )}
+                  </button>
+                  <button
+                    className="btn btn--small"
+                    onClick={() => { setLinkOpen(false); setLinkError(null); setLinkSubject(''); }}
+                  >
+                    ✕
+                  </button>
+                </div>
+                {linkError && (
+                  <div style={{ fontSize: '0.8rem', color: '#c5221f' }}>
+                    {linkError}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Upload result banner */}
             {driveUploadResult && (
