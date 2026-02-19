@@ -33,7 +33,7 @@ function getInitials(name) {
 /**
  * Renders the scrollable list of email items (left panel).
  */
-function EmailList({ emails, selectedId, selectedThreadId, onSelect }) {
+function EmailList({ emails, selectedId, selectedThreadId, onSelect, onMarkRead, onMarkUnread }) {
   if (!emails || emails.length === 0) {
     return (
       <div className="email-list">
@@ -56,6 +56,8 @@ function EmailList({ emails, selectedId, selectedThreadId, onSelect }) {
           email={email}
           isSelected={email.id === selectedId || (selectedThreadId && email.threadId === selectedThreadId)}
           onClick={() => onSelect(email)}
+          onMarkRead={onMarkRead}
+          onMarkUnread={onMarkUnread}
         />
       ))}
     </div>
@@ -65,7 +67,7 @@ function EmailList({ emails, selectedId, selectedThreadId, onSelect }) {
 /**
  * Single row in the email list.
  */
-function EmailItem({ email, isSelected, onClick }) {
+function EmailItem({ email, isSelected, onClick, onMarkRead, onMarkUnread }) {
   const formatDate = (isoDate) => {
     if (!isoDate) return '';
     try {
@@ -101,6 +103,15 @@ function EmailItem({ email, isSelected, onClick }) {
   const avatarColor = getAvatarColor(fromDisplay);
   const initials = getInitials(fromDisplay);
 
+  const handleToggleRead = (e) => {
+    e.stopPropagation();
+    if (email.is_unread) {
+      onMarkRead?.(email);
+    } else {
+      onMarkUnread?.(email);
+    }
+  };
+
   return (
     <div
       className={classNames}
@@ -133,7 +144,25 @@ function EmailItem({ email, isSelected, onClick }) {
         </div>
         <div className="email-item__subject">{email.subject || '(no subject)'}</div>
         <div className="email-item__snippet">{email.snippet || ''}</div>
-        <span className="email-item__account">{email.account}</span>
+        <div className="email-item__bottom">
+          <span className="email-item__account">{email.account}</span>
+          <button
+            className={`email-item__read-toggle ${email.is_unread ? 'email-item__read-toggle--unread' : ''}`}
+            onClick={handleToggleRead}
+            title={email.is_unread ? 'Mark as read' : 'Mark as unread'}
+          >
+            {email.is_unread ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                <path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

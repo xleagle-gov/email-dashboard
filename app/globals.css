@@ -416,9 +416,16 @@ a {
   white-space: nowrap;
 }
 
+.email-item__bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  gap: 8px;
+}
+
 .email-item__account {
   display: inline-block;
-  margin-top: 6px;
   font-size: 0.68rem;
   font-weight: 500;
   color: var(--color-primary);
@@ -426,6 +433,40 @@ a {
   padding: 2px 10px;
   border-radius: var(--radius-full);
   letter-spacing: 0.01em;
+}
+
+.email-item__read-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+  opacity: 0.4;
+}
+
+.email-item:hover .email-item__read-toggle {
+  opacity: 1;
+}
+
+.email-item__read-toggle:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-primary);
+}
+
+.email-item__read-toggle--unread {
+  color: var(--color-primary);
+}
+
+.email-item__read-toggle--unread:hover {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
 }
 
 /* ============================================================ */
@@ -3024,5 +3065,814 @@ a {
   }
   .signature-editor {
     width: 100%;
+  }
+}
+
+
+/* ============================================================ */
+/*  Tab Bar                                                     */
+/* ============================================================ */
+.tab-bar {
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border-light);
+  padding: 0 28px;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.tab-bar__tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  border-bottom: 3px solid transparent;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  position: relative;
+  background: none;
+}
+
+.tab-bar__tab:hover {
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+}
+
+.tab-bar__tab--active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.tab-bar__icon {
+  font-size: 1.1rem;
+}
+
+.tab-bar__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tab-bar__badge--drafts {
+  background: var(--color-text-tertiary);
+}
+
+.tab-bar__tab--active .tab-bar__badge--drafts {
+  background: var(--color-primary);
+}
+
+
+/* ============================================================ */
+/*  Header count variants                                       */
+/* ============================================================ */
+.header__count--drafts {
+  background: var(--color-text-tertiary);
+  box-shadow: none;
+  animation: none;
+}
+
+
+/* ============================================================ */
+/*  Draft Item (in DraftList)                                   */
+/* ============================================================ */
+.draft-item {
+  position: relative;
+}
+
+.draft-item__badge {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  background: #e37400;
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+
+/* ============================================================ */
+/*  Draft Detail – empty state                                  */
+/* ============================================================ */
+.draft-detail__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-secondary);
+  padding: 48px 32px;
+  text-align: center;
+  animation: fadeIn 0.5s var(--ease-out);
+}
+
+/* ============================================================ */
+/*  Gmail-style Draft Card                                      */
+/* ============================================================ */
+.draft-gmail-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+/* Title bar – dark header like Gmail compose */
+.draft-gmail-card__titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #404040;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.draft-gmail-card__title {
+  flex: 1;
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.draft-gmail-card__titlebar-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.draft-gmail-card__action {
+  color: #fff !important;
+  background: rgba(255,255,255,0.15) !important;
+  border: none !important;
+  font-size: 0.78rem !important;
+  padding: 4px 10px !important;
+  border-radius: 4px !important;
+}
+
+.draft-gmail-card__action:hover {
+  background: rgba(255,255,255,0.25) !important;
+}
+
+/* Header fields (From / To / Subject) */
+.draft-gmail-card__fields {
+  padding: 0;
+  border-bottom: 1px solid var(--color-border-light);
+  flex-shrink: 0;
+}
+
+.draft-gmail-card__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--color-border-light);
+  font-size: 0.88rem;
+}
+
+.draft-gmail-card__field:last-child {
+  border-bottom: none;
+}
+
+.draft-gmail-card__field label {
+  color: var(--color-text-tertiary);
+  font-weight: 500;
+  font-size: 0.82rem;
+  min-width: 55px;
+  flex-shrink: 0;
+}
+
+.draft-gmail-card__field-value {
+  color: var(--color-text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-gmail-card__input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 0.88rem;
+  font-family: inherit;
+  color: var(--color-text);
+  background: transparent;
+  padding: 4px 0;
+}
+
+.draft-gmail-card__input:focus {
+  border-bottom: 2px solid var(--color-primary);
+  margin-bottom: -2px;
+}
+
+/* Body area */
+.draft-gmail-card__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/* Iframe for rendered HTML view */
+.draft-body-iframe {
+  width: 100%;
+  min-height: 250px;
+  border: none;
+  display: block;
+  background: white;
+}
+
+/* Rich text editor wrapper (edit mode) */
+.draft-compose {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 300px;
+}
+
+.draft-compose__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.draft-compose__body .compose-editor__tiptap {
+  min-height: 250px;
+  padding: 16px 20px;
+  font-size: 0.92rem;
+  line-height: 1.65;
+  outline: none;
+}
+
+/* Gmail-style toolbar at bottom of editor */
+.draft-compose__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 12px;
+  background: var(--color-surface-container);
+  border-top: 1px solid var(--color-border-light);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* Attachments */
+.draft-gmail-card__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--color-border-light);
+  background: var(--color-surface-dim);
+  flex-shrink: 0;
+}
+
+.draft-gmail-card__attachment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+.draft-gmail-card__attachment-name {
+  font-weight: 500;
+  color: var(--color-text);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-gmail-card__attachment-size {
+  color: var(--color-text-tertiary);
+  font-size: 0.72rem;
+}
+
+/* Footer – action buttons */
+.draft-gmail-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid var(--color-border-light);
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+
+.draft-gmail-card__footer-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.draft-gmail-card__footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+
+/* ============================================================ */
+/*  AI Format Button                                            */
+/* ============================================================ */
+.btn--ai-format {
+  background: linear-gradient(135deg, #8430ce, #4285f4);
+  color: white;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 0.82rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 8px rgba(132, 48, 206, 0.25);
+}
+
+.btn--ai-format:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(132, 48, 206, 0.35);
+}
+
+.btn--ai-format:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn--success {
+  background: var(--color-success);
+  color: white;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 0.82rem;
+  transition: all var(--transition-fast);
+}
+
+.btn--success:hover {
+  background: #0d652d;
+  transform: translateY(-1px);
+}
+
+.btn--success:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn--danger {
+  background: var(--color-danger);
+  color: white;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 0.82rem;
+  transition: all var(--transition-fast);
+}
+
+.btn--danger:hover {
+  background: #a31815;
+  transform: translateY(-1px);
+}
+
+.btn--danger:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+
+/* ============================================================ */
+/*  Draft Action Toast                                          */
+/* ============================================================ */
+.draft-action-toast {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: 1000;
+  padding: 12px 20px;
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+  font-weight: 500;
+  box-shadow: var(--shadow-3);
+  animation: slideInRight 0.3s var(--ease-out), fadeOut 0.5s 3.5s var(--ease-out) forwards;
+}
+
+.draft-action-toast--success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success);
+}
+
+.draft-action-toast--error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+
+/* ============================================================ */
+/*  Draft Format Options Modal                                  */
+/* ============================================================ */
+.draft-format-options {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.draft-format-options__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+}
+
+.draft-format-options__panel {
+  position: relative;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  max-width: 520px;
+  width: 90%;
+  box-shadow: var(--shadow-3);
+  animation: slideUp 0.3s var(--ease-out);
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.draft-format-options__title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.draft-format-options__desc {
+  font-size: 0.88rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.draft-format-options__checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.draft-format-options__check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.draft-format-options__check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.draft-format-options__hint {
+  display: block;
+  width: 100%;
+  padding-left: 28px;
+  font-size: 0.78rem;
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.draft-format-options__hint--ok {
+  color: var(--color-success);
+  font-style: normal;
+}
+
+.draft-format-options__hint--warn {
+  color: #e37400;
+  font-style: normal;
+}
+
+.draft-format-options__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+
+/* ============================================================ */
+/*  Draft Format Preview                                        */
+/* ============================================================ */
+.draft-format-preview {
+  margin: 0 24px;
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-primary-light);
+  overflow: hidden;
+  animation: fadeIn 0.3s var(--ease-out);
+}
+
+.draft-format-preview__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: rgba(25, 103, 210, 0.08);
+  border-bottom: 1px solid var(--color-primary-container);
+}
+
+.draft-format-preview__label {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.draft-format-preview__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.draft-format-preview__content {
+  padding: 0;
+  background: var(--color-surface);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+
+/* ============================================================ */
+/*  Draft AI Chat (reuses ChatPanel)                            */
+/* ============================================================ */
+.draft-ai-chat {
+  border-top: 2px solid var(--color-primary);
+  background: var(--color-surface-container);
+  flex-shrink: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.draft-ai-chat .chat-panel {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ============================================================ */
+/*  DraftChatPanel – simplified AI panel for drafts              */
+/* ============================================================ */
+.draft-chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 200px;
+  max-height: 60vh;
+}
+
+.draft-chat-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.9rem;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.draft-chat-panel__title {
+  flex: 1;
+}
+
+.draft-chat-panel__header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.draft-chat-panel__header-controls .btn--icon {
+  color: #fff;
+  background: rgba(255,255,255,0.15);
+  border: none;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.draft-chat-panel__header-controls .btn--icon:hover {
+  background: rgba(255,255,255,0.3);
+}
+
+/* ── Setup phase ── */
+.draft-chat-panel__setup {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.draft-chat-panel__prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.draft-chat-panel__prompt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.draft-chat-panel__label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.draft-chat-panel__prompt-textarea {
+  width: 100%;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  line-height: 1.5;
+  resize: vertical;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  box-sizing: border-box;
+}
+.draft-chat-panel__prompt-textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(103, 80, 164, 0.12);
+}
+
+.draft-chat-panel__context-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--color-surface-variant);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+  flex-wrap: wrap;
+}
+
+.draft-chat-panel__context-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(103, 80, 164, 0.1);
+  color: var(--color-primary);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.draft-chat-panel__start {
+  align-self: center;
+  padding: 10px 32px !important;
+  font-size: 0.95rem !important;
+  border-radius: 24px !important;
+}
+
+/* ── Chat phase ── */
+.draft-chat-panel__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.draft-chat-panel__input-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--color-outline-variant);
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+
+.draft-chat-panel__input {
+  flex: 1;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 20px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  background: var(--color-surface-container);
+  color: var(--color-text-primary);
+}
+.draft-chat-panel__input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.draft-chat-panel__input:disabled {
+  opacity: 0.6;
+}
+
+.draft-chat-panel__auto-applied {
+  padding: 8px 16px;
+  background: rgba(76, 175, 80, 0.1);
+  color: #2e7d32;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border-bottom: 1px solid rgba(76, 175, 80, 0.2);
+}
+
+/* ============================================================ */
+/*  Mobile: Draft + Tabs                                        */
+/* ============================================================ */
+@media (max-width: 768px) {
+  .draft-gmail-card__footer-left {
+    flex-wrap: wrap;
+  }
+
+  .draft-gmail-card__titlebar {
+    padding: 8px 12px;
+  }
+
+  .draft-format-options__panel {
+    width: 95%;
+    padding: 20px;
+  }
+
+  .tab-bar {
+    padding: 0 16px;
+  }
+
+  .tab-bar__tab {
+    padding: 10px 16px;
+    font-size: 0.82rem;
   }
 }

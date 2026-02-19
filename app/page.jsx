@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { fetchUnreadEmails, fetchAccounts, fetchEmailDetail, markAsRead, markAsUnread, fetchThread, createDraft, sendEmail, chatWithAI } from '@/lib/api';
+import { fetchUnreadEmails, fetchAccounts, fetchEmailDetail, markAsRead, markAsUnread, fetchThread, createDraft, sendEmail, chatWithAI, fetchDrafts } from '@/lib/api';
 import { parseRecommendedAttachments, matchFilesToDrive } from '@/components/ChatPanel';
 import EmailList from '@/components/EmailList';
 import EmailDetail from '@/components/EmailDetail';
 import ComposeEditor from '@/components/ComposeEditor';
+import DraftList from '@/components/DraftList';
+import DraftDetail from '@/components/DraftDetail';
 
 export default function DashboardPage() {
   // ---- State ----
@@ -22,6 +24,15 @@ export default function DashboardPage() {
 
   // Track if detail panel should be visible on mobile
   const [detailVisible, setDetailVisible] = useState(false);
+
+  // Tab navigation: 'inbox' or 'drafts'
+  const [activeTab, setActiveTab] = useState('inbox');
+
+  // Drafts state
+  const [drafts, setDrafts] = useState([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
+  const [selectedDraft, setSelectedDraft] = useState(null);
+  const [draftDetailVisible, setDraftDetailVisible] = useState(false);
 
   // Compose new email state
   const [composeOpen, setComposeOpen] = useState(false);
@@ -150,6 +161,85 @@ export default function DashboardPage() {
     sendMessage: sendAiMessage,
   };
 
+  // ---- Draft AI formatting jobs (parallel, persisted across navigation) ----
+  // Map of draftId → { draftId, subject, loading, html, error }
+  const [draftAiJobs, setDraftAiJobs] = useState({});
+
+  const startDraftAiFormat = useCallback((draftId, subject, account, to, body, signature) => {
+    // Don't restart if already running
+    setDraftAiJobs(prev => {
+      if (prev[draftId]?.loading) return prev;
+      return { ...prev, [draftId]: { draftId, subject, loading: true, html: null, error: null } };
+    });
+
+    const OPT_OUT = "If these sorts of requests aren't a fit, reply and we'll remove you from future quote requests.";
+    const AI_PROMPT = `You are an AI assistant helping format and improve a draft email for a government contracting company.
+
+Please:
+1. Fix grammar, spelling, and punctuation
+2. Improve professional tone and clarity
+3. Keep the original intent, information, and meaning intact
+4. Output ONLY the email body as HTML wrapped in \`\`\`html fences — do NOT include a subject line in your output
+
+IMPORTANT — Gmail HTML constraints (this email will be sent through Gmail):
+- Use ONLY simple inline styles if needed (no <style> blocks, no CSS classes)
+- Use simple elements: <p>, <br>, <b>, <strong>, <em>, <i>, <ul>, <ol>, <li>, <a>, <table>
+- NO divs with complex styling, no flexbox, no grid
+- Keep formatting minimal and clean — Gmail strips most advanced CSS
+- Use <br> for line breaks within a section, <p> for paragraph separation
+
+SIGNATURE & OPT-OUT LINE:
+- The account's signature and opt-out line are provided below the draft.
+- If the draft does NOT already contain the opt-out line, add it near the end of the email BEFORE the signature.
+- If the draft does NOT already contain the signature, add it at the very end.
+- Do NOT duplicate them if they already exist in the draft.
+- The opt-out line should appear as a normal paragraph, not in a special style.`;
+
+    let contextMsg = `Here is the draft email to format:\n\nSubject: ${subject || '(no subject)'}\nTo: ${to || '(no recipient)'}\nFrom: ${account || ''}\n\n${body || '(empty draft)'}`;
+    if (signature) contextMsg += `\n\n---\nSIGNATURE FOR THIS ACCOUNT:\n${signature}`;
+    contextMsg += `\n\nOPT-OUT LINE:\n${OPT_OUT}`;
+
+    const messages = [
+      { role: 'system', content: AI_PROMPT },
+      { role: 'user', content: contextMsg },
+    ];
+
+    chatWithAI(messages, 'gemini', 'gemini-3-flash-preview')
+      .then(({ reply }) => {
+        const match = reply.match(/```html\s*\n?([\s\S]*?)\n?```/i);
+        setDraftAiJobs(prev => ({
+          ...prev,
+          [draftId]: {
+            ...prev[draftId],
+            loading: false,
+            html: match ? match[1].trim() : null,
+            error: match ? null : 'AI did not return formatted HTML.',
+          }
+        }));
+      })
+      .catch((err) => {
+        console.error('Draft AI format error:', err);
+        const detail = err?.response?.data?.details || err?.response?.data?.error || '';
+        setDraftAiJobs(prev => ({
+          ...prev,
+          [draftId]: {
+            ...prev[draftId],
+            loading: false,
+            html: null,
+            error: detail || 'AI formatting failed. Please try again.',
+          }
+        }));
+      });
+  }, []);
+
+  const dismissDraftAiJob = useCallback((draftId) => {
+    setDraftAiJobs(prev => {
+      const next = { ...prev };
+      delete next[draftId];
+      return next;
+    });
+  }, []);
+
   // AI Sessions panel
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [dismissedToasts, setDismissedToasts] = useState(new Set());
@@ -175,12 +265,24 @@ export default function DashboardPage() {
   const [editingSigAccount, setEditingSigAccount] = useState('');
   const [editingSigText, setEditingSigText] = useState('');
 
-  // Load signatures from localStorage on mount
+  // Load signatures from localStorage on mount (with defaults)
   useEffect(() => {
+    const defaults = {
+      'abhiram@vsmflows.com': 'Thanks,\nAbhiram Koganti\nChief Operating Officer\nVSM\n(832)380-5845\n📍 2021 Guadalupe St, Suite 260, Austin, TX 78705\nhttps://www.vsmflows.com/',
+      'avinash@vsmflows.com': 'Thanks,\nAvinash Nayak\nChief Operating Officer\nVSM\n(832)380-5845\n📍 2021 Guadalupe St, Suite 260, Austin, TX 78705\nhttps://www.vsmflows.com/',
+    };
     try {
       const saved = localStorage.getItem('emailDashboard_signatures');
-      if (saved) setSignatures(JSON.parse(saved));
-    } catch { /* ignore */ }
+      const parsed = saved ? JSON.parse(saved) : {};
+      // Merge: use saved value only if non-empty, otherwise keep the default
+      const merged = { ...defaults };
+      for (const [key, val] of Object.entries(parsed)) {
+        if (val) merged[key] = val;
+      }
+      setSignatures(merged);
+    } catch {
+      setSignatures(defaults);
+    }
   }, []);
 
   // Save signatures to localStorage whenever they change
@@ -227,15 +329,46 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const loadDrafts = useCallback(async () => {
+    try {
+      setDraftsLoading(true);
+      const data = await fetchDrafts({ account: activeAccount || undefined });
+      const freshDrafts = data.drafts || [];
+      setDrafts(freshDrafts);
+      // Keep selectedDraft in sync with fresh data so view mode shows updated content
+      setSelectedDraft(prev => {
+        if (!prev) return prev;
+        const updated = freshDrafts.find(d => d.draftId === prev.draftId);
+        return updated || prev;
+      });
+    } catch (err) {
+      console.error('Failed to load drafts:', err);
+    } finally {
+      setDraftsLoading(false);
+    }
+  }, [activeAccount]);
+
   useEffect(() => {
     loadEmails();
     loadAccounts();
   }, [loadEmails, loadAccounts]);
 
+  // Load drafts when switching to drafts tab
+  useEffect(() => {
+    if (activeTab === 'drafts') {
+      loadDrafts();
+    }
+  }, [activeTab, loadDrafts]);
+
   // ---- Actions ----
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadEmails(false);
+    if (activeTab === 'drafts') {
+      await loadDrafts();
+      setRefreshing(false);
+    } else {
+      await loadEmails(false);
+    }
   };
 
   const handleSelectEmail = async (email) => {
@@ -339,6 +472,37 @@ export default function DashboardPage() {
     }
   };
 
+  // ---- Draft handlers ----
+  const handleSelectDraft = (draft) => {
+    setSelectedDraft(draft);
+    setDraftDetailVisible(true);
+  };
+
+  const handleDraftBack = () => {
+    setDraftDetailVisible(false);
+  };
+
+  const handleDraftUpdated = () => {
+    loadDrafts();
+  };
+
+  const handleDraftDeleted = (draftId) => {
+    setDrafts(prev => prev.filter(d => d.draftId !== draftId));
+    setSelectedDraft(null);
+    setDraftDetailVisible(false);
+  };
+
+  const handleTabSwitch = (tab) => {
+    setActiveTab(tab);
+    if (tab === 'inbox') {
+      setSelectedDraft(null);
+      setDraftDetailVisible(false);
+    } else {
+      setSelectedEmail(null);
+      setDetailVisible(false);
+    }
+  };
+
   // ---- Thread refresh (after reply sent) ----
   const handleThreadRefresh = useCallback(async () => {
     if (!selectedEmail) return;
@@ -350,10 +514,14 @@ export default function DashboardPage() {
     }
   }, [selectedEmail]);
 
-  // ---- Filtered emails ----
+  // ---- Filtered emails & drafts ----
   const filteredEmails = activeAccount
     ? emails.filter(e => e.account === activeAccount)
     : emails;
+
+  const filteredDrafts = activeAccount
+    ? drafts.filter(d => d.account === activeAccount)
+    : drafts;
 
   // Only show unread in the list
   const unreadEmails = filteredEmails.filter(e => e.is_unread);
@@ -401,7 +569,11 @@ export default function DashboardPage() {
             <span className="header__logo-icon">✉</span>
             Email Dashboard
           </div>
-          <span className="header__count">{unreadEmails.length} unread</span>
+          {activeTab === 'inbox' ? (
+            <span className="header__count">{unreadEmails.length} unread</span>
+          ) : (
+            <span className="header__count header__count--drafts">{filteredDrafts.length} drafts</span>
+          )}
         </div>
         <div className="header__right">
           {aiSessionCount > 0 && (
@@ -441,6 +613,30 @@ export default function DashboardPage() {
       {/* Error banner */}
       {error && <div className="error-banner">⚠ {error}</div>}
 
+      {/* Tab Bar */}
+      <div className="tab-bar">
+        <button
+          className={`tab-bar__tab ${activeTab === 'inbox' ? 'tab-bar__tab--active' : ''}`}
+          onClick={() => handleTabSwitch('inbox')}
+        >
+          <span className="tab-bar__icon">📥</span>
+          Inbox
+          {unreadEmails.length > 0 && (
+            <span className="tab-bar__badge">{unreadEmails.length}</span>
+          )}
+        </button>
+        <button
+          className={`tab-bar__tab ${activeTab === 'drafts' ? 'tab-bar__tab--active' : ''}`}
+          onClick={() => handleTabSwitch('drafts')}
+        >
+          <span className="tab-bar__icon">📝</span>
+          Drafts
+          {drafts.length > 0 && (
+            <span className="tab-bar__badge tab-bar__badge--drafts">{drafts.length}</span>
+          )}
+        </button>
+      </div>
+
       {/* Account filter bar */}
       <div className="filter-bar">
         <button
@@ -463,29 +659,56 @@ export default function DashboardPage() {
 
       {/* Main split view */}
       <div className="main">
-        <EmailList
-          emails={groupedEmails}
-          selectedId={selectedEmail?.id}
-          selectedThreadId={selectedEmail?.threadId}
-          onSelect={(email) => {
-            setActiveChatMsgId(null);
-            handleSelectEmail(email);
-          }}
-        />
-        <EmailDetail
-          email={selectedEmail}
-          threadMessages={threadMessages}
-          threadLoading={threadLoading || detailLoading}
-          visible={detailVisible}
-          onBack={handleBack}
-          onMarkRead={handleMarkRead}
-          onMarkUnread={handleMarkUnread}
-          opportunity={selectedEmail?.opportunity || null}
-          accounts={accounts}
-          onThreadRefresh={handleThreadRefresh}
-          chatManager={chatManager}
-          signatures={signatures}
-        />
+        {activeTab === 'inbox' ? (
+          <>
+            <EmailList
+              emails={groupedEmails}
+              selectedId={selectedEmail?.id}
+              selectedThreadId={selectedEmail?.threadId}
+              onSelect={(email) => {
+                setActiveChatMsgId(null);
+                handleSelectEmail(email);
+              }}
+              onMarkRead={handleMarkRead}
+              onMarkUnread={handleMarkUnread}
+            />
+            <EmailDetail
+              email={selectedEmail}
+              threadMessages={threadMessages}
+              threadLoading={threadLoading || detailLoading}
+              visible={detailVisible}
+              onBack={handleBack}
+              onMarkRead={handleMarkRead}
+              onMarkUnread={handleMarkUnread}
+              opportunity={selectedEmail?.opportunity || null}
+              accounts={accounts}
+              onThreadRefresh={handleThreadRefresh}
+              chatManager={chatManager}
+              signatures={signatures}
+            />
+          </>
+        ) : (
+          <>
+            <DraftList
+              drafts={filteredDrafts}
+              selectedDraftId={selectedDraft?.draftId}
+              onSelect={handleSelectDraft}
+              loading={draftsLoading}
+            />
+            <DraftDetail
+              draft={selectedDraft}
+              visible={draftDetailVisible}
+              onBack={handleDraftBack}
+              onDraftUpdated={handleDraftUpdated}
+              onDraftDeleted={handleDraftDeleted}
+              accounts={accounts}
+              signatures={signatures}
+              aiJob={selectedDraft ? draftAiJobs[selectedDraft.draftId] : null}
+              onStartAiFormat={startDraftAiFormat}
+              onDismissAiJob={dismissDraftAiJob}
+            />
+          </>
+        )}
       </div>
 
       {/* AI Sessions Panel */}
@@ -563,8 +786,16 @@ export default function DashboardPage() {
               <div key={s.msgId} className={`ai-toast__item ai-toast__item--${s.status}`}>
                 <button
                   className="ai-toast__body"
-                  onClick={() => setAiPanelOpen(true)}
-                  title="Click to view AI sessions"
+                  onClick={() => {
+                    setActiveChatMsgId(s.msgId);
+                    const targetEmail = emails.find(e =>
+                      e.id === s.emailRef?.id || e.threadId === s.emailRef?.threadId
+                    );
+                    if (targetEmail) {
+                      handleSelectEmail(targetEmail);
+                    }
+                  }}
+                  title="Click to open email thread"
                 >
                   {s.status === 'thinking' && (
                     <span className="spinner spinner--small" style={{ width: 14, height: 14, borderWidth: 2 }} />
@@ -592,6 +823,58 @@ export default function DashboardPage() {
                 </button>
               </div>
             ))}
+          </div>
+        );
+      })()}
+
+      {/* Floating Draft AI status toasts */}
+      {(() => {
+        const jobs = Object.values(draftAiJobs).filter(j => !dismissedToasts.has(`draft-${j.draftId}`));
+        if (jobs.length === 0) return null;
+        return (
+          <div className="ai-toast" style={{ bottom: Object.values(chatSessions).filter(s => s.phase === 'chat' && !dismissedToasts.has(s.msgId)).length > 0 ? 80 : 16 }}>
+            {jobs.map(j => {
+              const status = j.loading ? 'thinking' : j.error ? 'error' : 'done';
+              return (
+                <div key={j.draftId} className={`ai-toast__item ai-toast__item--${status}`}>
+                  <button
+                    className="ai-toast__body"
+                    onClick={() => {
+                      // Navigate to that draft
+                      const d = drafts.find(dr => dr.draftId === j.draftId);
+                      if (d) {
+                        setActiveTab('drafts');
+                        setSelectedDraft(d);
+                        setDraftDetailVisible(true);
+                      }
+                    }}
+                    title="Click to view this draft"
+                  >
+                    {status === 'thinking' && (
+                      <span className="spinner spinner--small" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                    )}
+                    {status === 'done' && <span className="ai-toast__icon">✅</span>}
+                    {status === 'error' && <span className="ai-toast__icon">⚠️</span>}
+                    <span className="ai-toast__text">
+                      {status === 'thinking' && '✏️ Formatting draft… '}
+                      {status === 'done' && '✏️ Draft formatted – '}
+                      {status === 'error' && '✏️ Format failed – '}
+                      <strong>{(j.subject || '').slice(0, 50)}</strong>
+                    </span>
+                  </button>
+                  <button
+                    className="ai-toast__close"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDismissedToasts(prev => new Set([...prev, `draft-${j.draftId}`]));
+                    }}
+                    title="Dismiss"
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
           </div>
         );
       })()}

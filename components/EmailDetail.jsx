@@ -147,8 +147,8 @@ function EmailDetail({
     setLinkError(null);
   }, [email?.id]);
 
-  // Auto-fetch domain history + auto-link most recent solicitation in background.
-  // Runs in parallel with thread loading — doesn't block the UI at all.
+  // Auto-link: first try matching the email subject directly, then fall back
+  // to searching domain history. Runs in background without blocking the UI.
   useEffect(() => {
     if (!email?.id || !email?.account || !email?.from) return;
     const domain = extractDomain(email.from);
@@ -159,7 +159,22 @@ function EmailDetail({
 
     (async () => {
       try {
-        // Step 1: Fetch domain history (background, doesn't block UI)
+        // Step 1: Try matching the email's own subject first
+        let subjectLinked = false;
+        if (email.subject) {
+          try {
+            const subjectResult = await fetchOpportunity(email.subject);
+            if (cancelled) return;
+            if (subjectResult.matched && subjectResult.opportunity) {
+              setLinkedOpportunity(subjectResult.opportunity);
+              subjectLinked = true;
+            }
+          } catch (err) {
+            console.error('Subject match failed:', err);
+          }
+        }
+
+        // Step 2: Fetch domain history (for the panel UI and fallback linking)
         const data = await fetchDomainHistory(email.account, domain);
         if (cancelled) return;
 
@@ -170,7 +185,7 @@ function EmailDetail({
 
         if (domEmails.length === 0) return;
 
-        // Step 2: Batch-match all subjects in ONE request
+        // Step 3: Batch-match all domain history subjects in ONE request
         const batchInput = domEmails
           .filter(de => de.subject)
           .map(de => ({ id: de.id, subject: de.subject }));
@@ -180,7 +195,7 @@ function EmailDetail({
         const matchMap = await fetchOpportunitiesBatch(batchInput);
         if (cancelled) return;
 
-        // Step 3: Convert batch results to idx-based map for the panel UI
+        // Step 4: Convert batch results to idx-based map for the panel UI
         const matches = {};
         domEmails.forEach((de, idx) => {
           if (de.id && matchMap[de.id]) {
@@ -189,14 +204,15 @@ function EmailDetail({
         });
         setDomainMatches(matches);
 
-        // Step 4: Auto-link the most recent solicitation (idx 0 = newest)
-        const sortedIdxs = Object.keys(matches).map(Number).sort((a, b) => a - b);
-        if (sortedIdxs.length > 0) {
-          setLinkedOpportunity(matches[sortedIdxs[0]]);
+        // Step 5: Only auto-link from domain history if subject match didn't find anything
+        if (!subjectLinked) {
+          const sortedIdxs = Object.keys(matches).map(Number).sort((a, b) => a - b);
+          if (sortedIdxs.length > 0) {
+            setLinkedOpportunity(matches[sortedIdxs[0]]);
+          }
         }
       } catch (err) {
-        console.error('Background domain fetch failed:', err);
-        // Silently fail — user can still click the button manually
+        console.error('Background auto-link failed:', err);
       } finally {
         if (!cancelled) setDomainLoading(false);
       }
